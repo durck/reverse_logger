@@ -1,0 +1,41 @@
+services:
+  reverse_ssh:
+    image: ${REVERSE_SSH_IMAGE:?set REVERSE_SSH_IMAGE in .env}
+    container_name: reverse_ssh
+    restart: unless-stopped
+    environment:
+      EXTERNAL_ADDRESS: ${REVERSE_SSH_EXTERNAL_ADDRESS:?set REVERSE_SSH_EXTERNAL_ADDRESS in .env}
+      SEED_AUTHORIZED_KEYS: ${SEED_AUTHORIZED_KEYS:?set SEED_AUTHORIZED_KEYS in .env}
+    ports:
+      - "${REVERSE_SSH_BIND_IP:?set REVERSE_SSH_BIND_IP in .env}:${REVERSE_SSH_BIND_PORT:-3232}:2222"
+    volumes:
+      - ${REVERSE_SSH_DATA_DIR:-./data/reverse_ssh}:/data
+    networks:
+      - reverse_internal
+
+  rssh-logger:
+    build:
+      context: .
+    image: reverse-logger/rssh-logger:local
+    container_name: rssh-logger
+    restart: unless-stopped
+    environment:
+      LISTEN_ADDR: ":8080"
+      DATA_DIR: /data
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?set WEBHOOK_TOKEN in .env}
+      EDGE_FORWARD_TOKEN: ${EDGE_FORWARD_TOKEN:-}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS:-}
+      TELEGRAM_PROXY_URL: ${TELEGRAM_PROXY_URL:-}
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-}
+    expose:
+      - "8080"
+    volumes:
+      - ${LOGGER_DATA_DIR:-./data/logger}:/data
+    networks:
+      - reverse_internal
+
+networks:
+  reverse_internal:
+    driver: bridge
