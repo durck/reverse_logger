@@ -49,13 +49,18 @@ sudo systemctl enable --now docker
 sudo docker run --rm hello-world
 ```
 
-Optional, if the deploy user should run Docker without `sudo`:
+Allow the deploy user to run Docker. The rest of this runbook uses `docker`
+and `docker compose` without `sudo`.
 
 ```sh
 sudo usermod -aG docker "$USER"
 newgrp docker
+docker info >/dev/null
 docker compose version
 ```
+
+If `docker info` still fails with a permission error, log out and back in, then
+rerun the check.
 
 ## 2. Clone the Repository
 
@@ -105,18 +110,56 @@ Set at minimum:
   `vps-entrypoint.example.com:443`.
 - `REVERSE_SSH_PUBLIC_PORT`: public VPS entrypoint port; keep it aligned with
   the VPS DNAT `PUBLIC_PORT`.
-- `REVERSE_SSH_IMAGE`: your custom `reverse_ssh` image.
+- `REVERSE_SSH_IMAGE`: local Docker image tag for your custom `reverse_ssh`
+  build, normally `reverse-ssh:local`.
+- `REVERSE_SSH_REPO_URL`: optional repository URL to clone automatically.
+- `REVERSE_SSH_SOURCE_DIR`: local path for a manually cloned or
+  automatically cloned `reverse_ssh` repository.
 - `SEED_AUTHORIZED_KEYS`: public key contents, not a file path.
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token if optional edge forwarding is
   used.
 - `TELEGRAM_*` settings and `TELEGRAM_PROXY_URL` if alerts are enabled.
 
-## 4. Start the Main Stack
+## 4. Build the reverse_ssh Image Locally
+
+If you want the helper to clone the repository, set `REVERSE_SSH_REPO_URL` in
+`.env` first:
+
+```text
+REVERSE_SSH_REPO_URL=https://github.com/example/reverse_ssh.git
+REVERSE_SSH_REPO_REF=main
+REVERSE_SSH_SOURCE_DIR=/opt/reverse-logger/src/reverse_ssh
+REVERSE_SSH_IMAGE=reverse-ssh:local
+```
+
+If you prefer to clone manually, leave `REVERSE_SSH_REPO_URL` empty and clone
+the repository to `REVERSE_SSH_SOURCE_DIR`:
+
+```sh
+mkdir -p /opt/reverse-logger/src
+git clone <reverse_ssh_repo_url> /opt/reverse-logger/src/reverse_ssh
+```
+
+Build the local image:
 
 ```sh
 cd /opt/reverse-logger
-docker compose pull || true
+set -a
+. ./.env
+set +a
+sh deploy/docker/build-reverse-ssh-image.sh
+docker image inspect "$REVERSE_SSH_IMAGE" >/dev/null
+```
+
+The build helper expects the `reverse_ssh` repository to contain a Dockerfile.
+If the Dockerfile is in a custom location, set `REVERSE_SSH_DOCKERFILE` and
+`REVERSE_SSH_BUILD_CONTEXT` in `.env`.
+
+## 5. Start the Main Stack
+
+```sh
+cd /opt/reverse-logger
 docker compose build rssh-logger
 docker compose up -d
 docker compose ps
@@ -132,7 +175,7 @@ example:
 Do not bind it to `0.0.0.0` unless you explicitly want direct public exposure
 from the main server.
 
-## 5. Register reverse_ssh Webhook
+## 6. Register reverse_ssh Webhook
 
 Enter the `reverse_ssh` server console using your normal workflow and register:
 
@@ -143,7 +186,7 @@ webhook -l
 
 Use the exact token from `.env`.
 
-## 6. VPS Base Bootstrap
+## 7. VPS Base Bootstrap
 
 Run on each clean Ubuntu VPS that will accept public `443/tcp`:
 
@@ -164,8 +207,8 @@ EOF
 sudo sysctl --system
 ```
 
-Run the existing Ansible automation that installs and configures SoftEther for
-the VPS. After Ansible completes, verify the VPN interface, routes, and target
+SoftEther provisioning is handled outside this runbook. After the existing
+automation has prepared the VPS, verify the VPN interface, routes, and target
 reachability:
 
 ```sh
@@ -177,7 +220,7 @@ nc -vz 192.0.2.10 3232
 In the examples below, `vpn_softether` is the VPS SoftEther interface and
 `192.0.2.10:3232` is the main `reverse_ssh` target.
 
-## 7. Apply VPS DNAT
+## 8. Apply VPS DNAT
 
 Clone the repository on the VPS or copy only `deploy/iptables/vps-forward.sh`
 from the main server:
@@ -221,7 +264,7 @@ and management access separately.
 See [softether-entrypoint.md](softether-entrypoint.md) for additional DNAT and
 SNAT notes.
 
-## 8. Optional Main Ingress Guard
+## 9. Optional Main Ingress Guard
 
 Apply a default-deny policy on the main server's internal ingress interface if
 that network also carries traffic from untrusted sources. This is not a
@@ -258,7 +301,7 @@ Persist only after verifying access:
 sudo netfilter-persistent save
 ```
 
-## 9. Optional edge-logger
+## 10. Optional edge-logger
 
 `edge-logger` is not the default forwarding path in the SoftEther model. Use
 it only if you explicitly need VPS-side connection events and accept a
@@ -289,7 +332,7 @@ EDGE_FORWARD_URL=http://192.0.2.10:8080/edge-events
 EDGE_FORWARD_TOKEN=<EDGE_FORWARD_TOKEN_FROM_MAIN_ENV>
 ```
 
-## 10. Configure Telegram Proxy
+## 11. Configure Telegram Proxy
 
 If the main server cannot reach Telegram directly, configure the proxy on a
 VPS using [telegram-proxy.md](telegram-proxy.md). Then smoke-test from the main
@@ -299,7 +342,7 @@ server:
 curl -x "$TELEGRAM_PROXY_URL" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
 ```
 
-## 11. Smoke Test
+## 12. Smoke Test
 
 Send a sample webhook inside the Compose network:
 
@@ -326,7 +369,7 @@ Then test the real path:
 5. If `ip_raw` is a VPS/VPN IP, either accept that limitation or enable
    optional VPS-side connection logging.
 
-## 12. Optional systemd Installation
+## 13. Optional systemd Installation
 
 After manual validation:
 

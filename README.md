@@ -7,6 +7,8 @@ It contains:
 - `cmd/rssh-logger`: central webhook receiver for `reverse_ssh`.
 - `cmd/edge-logger`: optional VPS TCP proxy logger for entrypoint logging.
 - Docker Compose for main-server services.
+- Local `reverse_ssh` image build helper that can clone a repository or use a
+  manually prepared checkout.
 - systemd, SoftEther/DNAT, iptables, and Telegram proxy examples.
 - manual deployment and operations documentation.
 

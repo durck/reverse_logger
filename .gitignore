@@ -1,5 +1,6 @@
 .env
 data/
+src/
 dist/
 *.db
 *.jsonl

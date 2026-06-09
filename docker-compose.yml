@@ -1,6 +1,7 @@
 services:
   reverse_ssh:
     image: ${REVERSE_SSH_IMAGE:?set REVERSE_SSH_IMAGE in .env}
+    pull_policy: never
     container_name: reverse_ssh
     restart: unless-stopped
     environment:
