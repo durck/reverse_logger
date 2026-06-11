@@ -39,6 +39,15 @@ Optional VPS edge events:
 tail -n 20 /var/lib/reverse-logger/edge_events.jsonl
 ```
 
+Nginx ingress and enriched central events:
+
+```sh
+tail -n 20 /opt/reverse-logger/data/logger/ingress_events.jsonl
+tail -n 20 /opt/reverse-logger/data/logger/enriched_events.jsonl
+sqlite3 /opt/reverse-logger/data/logger/events.db \
+  'select correlation_status, status, reverse_ssh_id, real_client_ip, transport, received_at from enriched_events order by id desc limit 20;'
+```
+
 ## Backup
 
 Stop writes briefly or use SQLite online backup tooling, then copy:
@@ -47,6 +56,8 @@ Stop writes briefly or use SQLite online backup tooling, then copy:
 /opt/reverse-logger/data/logger/events.db
 /opt/reverse-logger/data/logger/events.jsonl
 /opt/reverse-logger/data/logger/edge_events.jsonl
+/opt/reverse-logger/data/logger/ingress_events.jsonl
+/opt/reverse-logger/data/logger/enriched_events.jsonl
 ```
 
 The JSONL files are append-only durable audit trails. SQLite is for querying

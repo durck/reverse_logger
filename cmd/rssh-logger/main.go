@@ -27,7 +27,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := loggerapp.NewServer(config.WebhookToken, config.EdgeForwardToken, st, tg)
+	server := loggerapp.NewServerWithIngressPaths(config.WebhookToken, config.EdgeForwardToken, st, tg, config.IngressWSPath, config.IngressPushPath)
 	log.Printf("rssh-logger listening on %s", config.ListenAddr)
 	httpServer := &http.Server{
 		Addr:              config.ListenAddr,

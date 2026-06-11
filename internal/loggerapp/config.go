@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/durck/reverse_logger/internal/events"
 	"github.com/durck/reverse_logger/internal/telegram"
 )
 
@@ -14,6 +15,8 @@ type Config struct {
 	DataDir          string
 	WebhookToken     string
 	EdgeForwardToken string
+	IngressWSPath    string
+	IngressPushPath  string
 	Telegram         telegram.Config
 }
 
@@ -23,6 +26,8 @@ func LoadConfig() (Config, error) {
 		DataDir:          envOrDefault("DATA_DIR", "/data"),
 		WebhookToken:     strings.TrimSpace(os.Getenv("WEBHOOK_TOKEN")),
 		EdgeForwardToken: strings.TrimSpace(os.Getenv("EDGE_FORWARD_TOKEN")),
+		IngressWSPath:    events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
+		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
 		Telegram: telegram.Config{
 			Enabled:  parseBool(os.Getenv("TELEGRAM_ENABLED")),
 			BotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),

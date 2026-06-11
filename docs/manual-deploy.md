@@ -119,6 +119,9 @@ Set at minimum:
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token if optional edge forwarding is
   used.
+- `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`: central validation paths for nginx
+  ingress events. Keep them aligned with VPS nginx and `nginx-edge-forwarder`
+  `RSSH_WS_PATH` / `RSSH_PUSH_PATH`; defaults are `/ws` and `/push`.
 - `TELEGRAM_*` settings and `TELEGRAM_PROXY_URL` if alerts are enabled.
 
 ## 4. Build the reverse_ssh Image Locally
@@ -331,6 +334,16 @@ EDGE_FORWARD_ENABLED=true
 EDGE_FORWARD_URL=http://192.0.2.10:8080/edge-events
 EDGE_FORWARD_TOKEN=<EDGE_FORWARD_TOKEN_FROM_MAIN_ENV>
 ```
+
+## 10a. Optional Nginx WSS/HTTPS Entrypoint
+
+If clients use `wss://` or `https://` transports and the VPS should present a
+normal HTTPS surface, use [nginx-wss-https-entrypoint.md](nginx-wss-https-entrypoint.md)
+instead of raw DNAT or `edge-logger`.
+
+This path logs only WSS handshakes and HTTPS polling init requests on the VPS,
+forwards them to `/ingress-events/<EDGE_FORWARD_TOKEN>`, and keeps the
+`reverse_ssh` webhook as the canonical connected/disconnected source.
 
 ## 11. Configure Telegram Proxy
 

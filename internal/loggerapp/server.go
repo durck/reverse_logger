@@ -19,14 +19,22 @@ import (
 type Server struct {
 	webhookToken     string
 	edgeForwardToken string
+	ingressWSPath    string
+	ingressPushPath  string
 	store            *store.Store
 	telegram         *telegram.Client
 }
 
 func NewServer(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client) *Server {
+	return NewServerWithIngressPaths(webhookToken, edgeForwardToken, store, telegramClient, events.DefaultWSPath, events.DefaultPushPath)
+}
+
+func NewServerWithIngressPaths(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client, ingressWSPath, ingressPushPath string) *Server {
 	return &Server{
 		webhookToken:     webhookToken,
 		edgeForwardToken: edgeForwardToken,
+		ingressWSPath:    events.NormalizeIngressPath(ingressWSPath, events.DefaultWSPath),
+		ingressPushPath:  events.NormalizeIngressPath(ingressPushPath, events.DefaultPushPath),
 		store:            store,
 		telegram:         telegramClient,
 	}
@@ -37,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/hooks/", s.handleWebhook)
 	mux.HandleFunc("/edge-events/", s.handleEdgeEvent)
+	mux.HandleFunc("/ingress-events/", s.handleIngressEvent)
 	return mux
 }
 
@@ -90,10 +99,19 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	enriched, enrichedInserted, err := s.store.EnrichAndStoreEvent(event)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":     "accepted",
-		"event_hash": event.EventHash,
-		"duplicate":  !inserted,
+		"status":              "accepted",
+		"event_hash":          event.EventHash,
+		"duplicate":           !inserted,
+		"enriched_event_hash": enriched.EventHash,
+		"enriched_duplicate":  !enrichedInserted,
+		"correlation_status":  enriched.CorrelationStatus,
 	})
 }
 
@@ -150,6 +168,56 @@ func (s *Server) handleEdgeEvent(w http.ResponseWriter, r *http.Request) {
 		"status":     "accepted",
 		"event_hash": event.EventHash,
 		"duplicate":  !inserted,
+	})
+}
+
+func (s *Server) handleIngressEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !tokenMatches(tokenFromPath(r.URL.Path, "/ingress-events/"), s.edgeForwardToken) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var event events.IngressEvent
+	if err := json.Unmarshal(body, &event); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	event.RawJSON = append([]byte(nil), body...)
+	event, err = events.NormalizeIngressEvent(event, time.Now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := events.ValidateIngressRoute(event, s.ingressWSPath, s.ingressPushPath); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	inserted, err := s.store.InsertIngressEvent(event)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	reconciled, err := s.store.ReconcileIngressEvent(event)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":     "accepted",
+		"event_hash": event.EventHash,
+		"duplicate":  !inserted,
+		"reconciled": reconciled,
 	})
 }
 

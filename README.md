@@ -10,6 +10,7 @@ It contains:
 - Local `reverse_ssh` image build helper that can clone a repository or use a
   manually prepared checkout.
 - systemd, SoftEther/DNAT, iptables, and Telegram proxy examples.
+- nginx WSS/HTTPS VPS entrypoint with central ingress correlation.
 - manual deployment and operations documentation.
 
 Start with [docs/manual-deploy.md](docs/manual-deploy.md).
@@ -22,3 +23,6 @@ client -> VPS:443 -> SoftEther on VPS -> main internal address -> reverse_ssh
 
 The main server is treated as an internal target and does not need a SoftEther
 interface.
+
+For HTTPS-looking public entrypoints, see
+[docs/nginx-wss-https-entrypoint.md](docs/nginx-wss-https-entrypoint.md).
