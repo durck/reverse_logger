@@ -107,6 +107,18 @@ openssl rand -hex 32
 openssl rand -hex 32
 ```
 
+Generate the operator SSH key that will be seeded into `reverse_ssh`
+`authorized_keys`. This is the key you will use when connecting through
+`reverse_ssh`; it is not the SSH key used by Ansible to manage the VPS:
+
+```sh
+ssh-keygen -t ed25519 -a 100 -f ~/.ssh/reverse_ssh_operator -C "reverse_ssh_operator"
+cat ~/.ssh/reverse_ssh_operator.pub
+```
+
+Keep the private key in your local `~/.ssh/` or a vault. Put only the single
+public key line into `SEED_AUTHORIZED_KEYS`.
+
 Edit `.env`:
 
 ```sh
@@ -127,7 +139,8 @@ Set at minimum:
 - `REVERSE_SSH_REPO_URL`: optional repository URL to clone automatically.
 - `REVERSE_SSH_SOURCE_DIR`: local path for a manually cloned or
   automatically cloned `reverse_ssh` repository.
-- `SEED_AUTHORIZED_KEYS`: public key contents, not a file path.
+- `SEED_AUTHORIZED_KEYS`: `reverse_ssh` operator public key contents, not a
+  file path and not the private key.
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token if optional edge forwarding is
   used.
