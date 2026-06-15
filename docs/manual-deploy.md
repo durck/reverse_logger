@@ -134,6 +134,12 @@ Set at minimum:
   `vps-entrypoint.example.com:443`.
 - `REVERSE_SSH_PUBLIC_PORT`: public VPS entrypoint port; keep it aligned with
   the VPS DNAT `PUBLIC_PORT`.
+- `REVERSE_SSH_WS_PATH` / `REVERSE_SSH_PUSH_PATH`: listener web transport
+  paths. Keep them aligned with nginx, `nginx-edge-forwarder`, central
+  `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`, and generated clients.
+- `REVERSE_SSH_TRUSTED_PROXY_CIDR`: set this to the trusted nginx/VPN source
+  CIDR, for example `<vps_internal_ip>/32`, when nginx terminates TLS and
+  forwards real-IP headers.
 - `REVERSE_SSH_IMAGE`: local Docker image tag for your custom `reverse_ssh`
   build, normally `reverse-ssh:local`.
 - `REVERSE_SSH_REPO_URL`: optional repository URL to clone automatically.
@@ -219,6 +225,26 @@ docker compose up -d
 docker compose ps
 ```
 
+The Docker entrypoint starts the `reverse_ssh` listener from `.env`. With the
+default paths, it is equivalent to:
+
+```sh
+./server \
+  --datadir /data \
+  --enable-client-downloads \
+  --tls \
+  --external_address "$REVERSE_SSH_EXTERNAL_ADDRESS" \
+  --ws-path "$REVERSE_SSH_WS_PATH" \
+  --push-path "$REVERSE_SSH_PUSH_PATH" \
+  :2222
+```
+
+When `REVERSE_SSH_TRUSTED_PROXY_CIDR` is set, the entrypoint also adds:
+
+```sh
+--trusted-proxy-cidr "$REVERSE_SSH_TRUSTED_PROXY_CIDR"
+```
+
 The `reverse_ssh` listener must be bound only to the internal address, for
 example:
 
@@ -229,9 +255,53 @@ example:
 Do not bind it to `0.0.0.0` unless you explicitly want direct public exposure
 from the main server.
 
-## 6. Register reverse_ssh Webhook
+## 6. Connect to reverse_ssh and Register Webhook
 
-Enter the `reverse_ssh` server console using your normal workflow and register:
+Follow this sequence after the Compose stack is running. This prepares the
+catcher console and webhook registration only. Generate public WSS/HTTPS
+clients after the VPS entrypoint is configured in later steps.
+
+### 6.1 Load the deployment environment
+
+Run on the main server:
+
+```sh
+cd /opt/reverse-logger
+set -a
+. ./.env
+set +a
+```
+
+### 6.2 Connect to the catcher console
+
+The `SEED_AUTHORIZED_KEYS` value from `.env` authorizes the operator SSH key
+for the `reverse_ssh` server console. From the main server, or from any
+workstation that can route to `REVERSE_SSH_BIND_IP:REVERSE_SSH_BIND_PORT`,
+connect to the catcher console:
+
+```sh
+ssh -i ~/.ssh/reverse_ssh_operator \
+  -p "${REVERSE_SSH_BIND_PORT:-3232}" \
+  "$REVERSE_SSH_BIND_IP"
+```
+
+If your workstation cannot reach the internal bind address directly, connect
+from the main server shell or create a normal SSH tunnel to the main server
+first:
+
+```sh
+ssh -L 3232:<REVERSE_SSH_BIND_IP>:<REVERSE_SSH_BIND_PORT> <admin>@<main-server>
+ssh -i ~/.ssh/reverse_ssh_operator -p 3232 127.0.0.1
+```
+
+Do not use plain OpenSSH against the public `wss://` or `https://` nginx
+entrypoint. That public endpoint is for generated `reverse_ssh` clients; the
+operator console is the SSH service exposed by the `reverse_ssh` server on its
+internal bind address.
+
+### 6.3 Register the logger webhook
+
+Run inside the catcher console:
 
 ```text
 webhook --on http://rssh-logger:8080/hooks/<WEBHOOK_TOKEN>
@@ -402,17 +472,18 @@ Keep these values identical across the stack:
 - nginx public `rssh_ws_path` / `rssh_push_path`;
 - VPS forwarder `RSSH_WS_PATH` / `RSSH_PUSH_PATH`;
 - central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`;
-- `reverse_ssh` server/client `--ws-path` / `--push-path` or baked client
-  values from `link --ws-path` / `link --push-path`.
+- main `reverse_ssh` listener `REVERSE_SSH_WS_PATH` /
+  `REVERSE_SSH_PUSH_PATH`;
+- generated clients from `link --ws-path` / `link --push-path`.
 
 Use absolute base paths without a trailing slash, for example `/ws`,
 `/rssh-ws`, `/push`, or `/rssh-push`.
 
-When nginx is in front of `reverse_ssh`, run the patched server with
-`--trusted-proxy-cidr <vps_internal_ip>/32` or a narrower CIDR that contains
-only trusted VPS nginx sources. The nginx route overwrites `X-Real-IP` and
-`X-Forwarded-For` with `$remote_addr`; do not accept those headers from
-untrusted sources.
+When nginx is in front of `reverse_ssh`, set
+`REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32` or a narrower CIDR that
+contains only trusted VPS nginx sources, then recreate the `reverse_ssh`
+container. The nginx route overwrites `X-Real-IP` and `X-Forwarded-For` with
+`$remote_addr`; do not accept those headers from untrusted sources.
 
 ## 10b. Automated Nginx WSS/HTTPS VPS Entrypoint
 
@@ -439,7 +510,129 @@ configuration.
 See [../deploy/ansible/README.md](../deploy/ansible/README.md) for all
 variables and rollback commands.
 
-## 11. Configure Telegram Proxy
+## 11. Generate Client and Connect Through reverse_ssh
+
+Run this step only after one of the public VPS entrypoint paths is working:
+
+- raw DNAT from steps 7-8; or
+- nginx WSS/HTTPS edge from steps 10a-10b.
+
+For WSS/HTTPS, the public DNS record, TLS certificate, nginx route, SoftEther
+path, and backend reachability must already be valid. Otherwise the generated
+client will have a correct callback value but no reachable public endpoint.
+
+### 11.1 Connect to the catcher console
+
+From the main server, load `.env` and connect:
+
+```sh
+cd /opt/reverse-logger
+set -a
+. ./.env
+set +a
+
+ssh -i ~/.ssh/reverse_ssh_operator \
+  -p "${REVERSE_SSH_BIND_PORT:-3232}" \
+  "$REVERSE_SSH_BIND_IP"
+```
+
+### 11.2 Generate the reverse_ssh client
+
+Run inside the catcher console. The `--wss` and `--https` flags bake the
+public transport scheme into the client. `REVERSE_SSH_EXTERNAL_ADDRESS` from
+`.env` supplies the host and port unless `-s` is provided explicitly.
+
+The listener paths are already applied to the Dockerized `reverse_ssh` server
+through `REVERSE_SSH_WS_PATH` and `REVERSE_SSH_PUSH_PATH`. Use matching values
+when generating clients.
+
+Default WSS entrypoint:
+
+```text
+link --wss --ws-path /ws --push-path /push --name linux-wss
+```
+
+Default HTTPS polling entrypoint:
+
+```text
+link --https --ws-path /ws --push-path /push --name linux-https
+```
+
+For custom public paths, first set matching values in `.env` before starting
+or recreating `reverse_ssh`:
+
+```text
+REVERSE_SSH_WS_PATH=/rssh-ws
+REVERSE_SSH_PUSH_PATH=/rssh-push
+INGRESS_WS_PATH=/rssh-ws
+INGRESS_PUSH_PATH=/rssh-push
+```
+
+Then recreate the listener:
+
+```sh
+docker compose up -d --force-recreate reverse_ssh rssh-logger
+```
+
+Use the same values in `link`:
+
+```text
+link --wss --ws-path /rssh-ws --push-path /rssh-push --name linux-wss
+link --https --ws-path /rssh-ws --push-path /rssh-push --name linux-https
+```
+
+The command prints a download URL. Copy that URL to the target machine,
+download the generated client, and run it there. In `link -l`, the `Url`
+column is the binary download URL, while `Client Callback` is the callback
+transport baked into the binary. With the TLS listener used by this stack, the
+download URL should be `https://...`; WSS clients still show `wss://...` in
+`Client Callback`.
+
+If you run a standalone client manually instead of using `link`, use the same
+public transport URL and paths:
+
+```sh
+./client -d wss://<rssh-domain>:443 --ws-path /ws
+./client -d https://<rssh-domain>:443 --push-path /push
+```
+
+### 11.3 Confirm the client is connected
+
+Run inside the catcher console:
+
+```text
+ls
+```
+
+Use the client id shown by `ls` in the next step.
+
+### 11.4 Connect to the target through reverse_ssh
+
+Interactive connection from the catcher console:
+
+```text
+connect <client-id>
+```
+
+OpenSSH jump mode from a host that can reach
+`REVERSE_SSH_BIND_IP:REVERSE_SSH_BIND_PORT`:
+
+```sh
+ssh -i ~/.ssh/reverse_ssh_operator \
+  -J "${REVERSE_SSH_BIND_IP}:${REVERSE_SSH_BIND_PORT:-3232}" \
+  <client-id>
+```
+
+For a SOCKS tunnel through the connected client:
+
+```sh
+ssh -i ~/.ssh/reverse_ssh_operator \
+  -D 9050 \
+  -J "${REVERSE_SSH_BIND_IP}:${REVERSE_SSH_BIND_PORT:-3232}" \
+  <client-id>
+```
+
+## 12. Configure Telegram Proxy
 
 If the main server cannot reach Telegram directly, configure the proxy on a
 VPS using [telegram-proxy.md](telegram-proxy.md). Then smoke-test from the main
@@ -449,7 +642,7 @@ server:
 curl -x "$TELEGRAM_PROXY_URL" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
 ```
 
-## 12. Smoke Test
+## 13. Smoke Test
 
 Send a sample webhook inside the Compose network:
 
@@ -476,7 +669,7 @@ Then test the real path:
 5. If `ip_raw` is a VPS/VPN IP, either accept that limitation or enable
    optional VPS-side connection logging.
 
-## 13. Optional systemd Installation
+## 14. Optional systemd Installation
 
 After manual validation:
 

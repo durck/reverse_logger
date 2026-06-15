@@ -101,7 +101,23 @@ nginx source when real-IP headers are enabled:
 
 ```sh
 docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
-reverse_ssh --ws-path /ws --push-path /push --trusted-proxy-cidr <vps_internal_ip>/32
+```
+
+The main server `reverse_ssh` listener must use the same paths as the VPS
+nginx edge. In this repository's Docker stack, set:
+
+```text
+REVERSE_SSH_WS_PATH=/ws
+REVERSE_SSH_PUSH_PATH=/push
+REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32
+INGRESS_WS_PATH=/ws
+INGRESS_PUSH_PATH=/push
+```
+
+Then recreate the listener:
+
+```sh
+docker compose up -d --force-recreate reverse_ssh rssh-logger
 ```
 
 Use the same custom paths in generated clients:

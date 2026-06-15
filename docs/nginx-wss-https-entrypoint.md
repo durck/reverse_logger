@@ -41,11 +41,78 @@ If you change public transport paths, configure all three places consistently:
 - nginx locations and `map` rules;
 - VPS forwarder `RSSH_WS_PATH` / `RSSH_PUSH_PATH`;
 - central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`.
+- main `reverse_ssh` listener env `REVERSE_SSH_WS_PATH` /
+  `REVERSE_SSH_PUSH_PATH`;
+- generated clients from `link --ws-path` / `link --push-path`.
 
 The central logger validates ingress payloads against these paths and rejects
 wrong-path or malformed polling-key events even when the forwarding token is
 valid. `INGRESS_WS_PATH` defaults to `/ws`; `INGRESS_PUSH_PATH` defaults to
 `/push`. Custom paths must be absolute base paths without a trailing slash.
+
+## Operator and Client Workflow
+
+Use this sequence after the main `reverse_ssh` server and the nginx edge are
+running.
+
+### 1. Connect to the internal catcher console
+
+The public nginx endpoint is for generated `reverse_ssh` clients, not for the
+operator's OpenSSH session.
+
+```sh
+ssh -i ~/.ssh/reverse_ssh_operator -p 3232 <main_internal_ip>
+```
+
+### 2. Generate a client inside the catcher console
+
+Before generating custom-path clients, the main `reverse_ssh` listener must
+already be running with the same paths. In the Docker stack, set
+`REVERSE_SSH_WS_PATH` and `REVERSE_SSH_PUSH_PATH` in `.env`, then recreate the
+listener.
+
+For WSS:
+
+```text
+link --wss --ws-path /ws --push-path /push --name linux-wss
+```
+
+For HTTPS polling:
+
+```text
+link --https --ws-path /ws --push-path /push --name linux-https
+```
+
+If the public paths are customized, pass the same values to `link`:
+
+```text
+link --wss --ws-path /rssh-ws --push-path /rssh-push --name linux-wss
+link --https --ws-path /rssh-ws --push-path /rssh-push --name linux-https
+```
+
+### 3. Download and run the generated client on the target machine
+
+The generated client connects back to the public nginx domain through WSS or
+HTTPS polling.
+
+In `link -l`, `Url` is only the binary download URL. `Client Callback` is the
+actual reverse_ssh client transport and should show `wss://...` for WSS
+clients or `https://...` for HTTPS polling clients.
+
+### 4. Confirm the client and connect to it from the catcher console
+
+```text
+ls
+connect <client-id>
+```
+
+### 5. Optionally connect with OpenSSH jump mode
+
+Run from a host that can reach the internal catcher port.
+
+```sh
+ssh -i ~/.ssh/reverse_ssh_operator -J <main_internal_ip>:3232 <client-id>
+```
 
 ## Automated VPS Deployment
 

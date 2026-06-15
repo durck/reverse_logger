@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add Docker listener environment variables for custom `reverse_ssh` WSS and HTTPS polling paths.
+- Document the operator connection, client generation, and OpenSSH jump workflow for `reverse_ssh`.
 - Add Let's Encrypt HTTP-01 automation for Ansible-managed nginx edge VPS hosts.
 - Add Ansible playbook and deployment documentation for clean VPS nginx WSS/HTTPS edge rollout.
 - Add nginx WSS/HTTPS VPS ingress forwarding with central raw ingress and enriched event journals.

@@ -65,6 +65,24 @@ and dedupe.
 
 ## Troubleshooting
 
+Cannot connect to the `reverse_ssh` catcher console:
+
+1. Confirm the private key matches the public key in `SEED_AUTHORIZED_KEYS`.
+2. Confirm the stack exposes `REVERSE_SSH_BIND_IP:REVERSE_SSH_BIND_PORT`.
+3. From the main server, test the internal listener with:
+
+```sh
+cd /opt/reverse-logger
+set -a
+. ./.env
+set +a
+ssh -i ~/.ssh/reverse_ssh_operator -p "${REVERSE_SSH_BIND_PORT:-3232}" "$REVERSE_SSH_BIND_IP"
+```
+
+4. Do not test the operator console by running OpenSSH against the public
+   WSS/HTTPS nginx endpoint; generated clients use that endpoint, not the
+   operator console.
+
 Webhook not received:
 
 1. Check `webhook -l` inside `reverse_ssh`.
