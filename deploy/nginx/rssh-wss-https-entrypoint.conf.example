@@ -38,6 +38,25 @@ log_format rssh_ingress escape=json
     '"transport":"$rssh_transport"}';
 
 server {
+    listen 80;
+    server_name secret-entry.example.com;
+
+    access_log /var/log/nginx/reverse_ssh_acme.log combined;
+
+    # Certbot webroot mode writes challenges under this directory. Do not use
+    # certbot --nginx for this entrypoint because Ansible owns the nginx config.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://example.com$request_uri;
+    }
+}
+
+server {
     listen 443 ssl;
     server_name secret-entry.example.com;
 

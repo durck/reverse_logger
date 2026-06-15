@@ -16,8 +16,12 @@ vps_internal_ip: 192.0.2.2
 rssh_ws_path: /ws
 rssh_push_path: /push
 
-tls_cert_path: /etc/letsencrypt/live/secret-entry.example.com/fullchain.pem
-tls_key_path: /etc/letsencrypt/live/secret-entry.example.com/privkey.pem
+nginx_edge_acme_enabled: true
+nginx_edge_acme_email: admin@example.com
+nginx_edge_acme_webroot: /var/www/letsencrypt
+nginx_edge_acme_staging: false
+tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
+tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
 nginx_edge_create_self_signed_cert: false
 nginx_edge_self_signed_days: 30
 

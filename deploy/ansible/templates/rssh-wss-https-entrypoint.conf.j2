@@ -37,6 +37,23 @@ log_format rssh_ingress escape=json
     '"transport":"$rssh_transport"}';
 
 server {
+    listen 80;
+    server_name {{ rssh_domain }};
+
+    access_log /var/log/nginx/reverse_ssh_acme.log combined;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root {{ nginx_edge_acme_webroot }};
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 {{ redirect_target }}$request_uri;
+    }
+}
+
+server {
     listen 443 ssl;
     server_name {{ rssh_domain }};
 

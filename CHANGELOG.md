@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add Let's Encrypt HTTP-01 automation for Ansible-managed nginx edge VPS hosts.
 - Add Ansible playbook and deployment documentation for clean VPS nginx WSS/HTTPS edge rollout.
 - Add nginx WSS/HTTPS VPS ingress forwarding with central raw ingress and enriched event journals.
 - Add local `reverse_ssh` image build helper for clone-or-manual source workflows.

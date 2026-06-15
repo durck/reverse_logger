@@ -21,8 +21,9 @@ The main server does not need a SoftEther interface. It only needs a
 private/internal address reachable from the VPS through the existing SoftEther
 network path. SoftEther installation and account provisioning are intentionally
 out of scope because they are handled by deployment automation. The Ansible
-playbook in `deploy/ansible/` automates the nginx edge host after DNS, TLS,
-SoftEther reachability, and central logger values are known.
+playbook in `deploy/ansible/` automates the nginx edge host after DNS,
+SoftEther reachability, open `80/tcp` and `443/tcp`, and central logger values
+are known.
 
 Replace all example addresses, tokens, image names, and interface names before
 applying commands.
@@ -202,7 +203,7 @@ Use the exact token from `.env`.
 
 ## 7. VPS Base Bootstrap
 
-Run on each clean Ubuntu VPS that will accept public `443/tcp`:
+Run on each clean Ubuntu VPS that will accept public `80/tcp` and `443/tcp`:
 
 ```sh
 sudo apt-get update
@@ -272,8 +273,9 @@ sudo netfilter-persistent save
 sudo systemctl enable netfilter-persistent
 ```
 
-Open only `443/tcp` on the public VPS firewall or cloud firewall. Restrict SSH
-and management access separately.
+Open only `80/tcp` and `443/tcp` on the public VPS firewall or cloud firewall.
+Port `80/tcp` is required for Let's Encrypt HTTP-01 validation and may redirect
+all non-ACME traffic. Restrict SSH and management access separately.
 
 See [softether-entrypoint.md](softether-entrypoint.md) for additional DNAT and
 SNAT notes.
@@ -385,10 +387,16 @@ nano deploy/ansible/group_vars/vps_edge.yml
 ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
 ```
 
-The playbook installs nginx, builds `nginx-edge-forwarder`, renders systemd and
-nginx config, and enables both services. It still requires existing DNS,
-SoftEther/internal reachability to `backend_reverse_ssh_url`, and production
-TLS certificate paths unless the documented self-signed smoke mode is enabled.
+The playbook installs nginx, Snap Certbot, builds `nginx-edge-forwarder`,
+issues a free Let's Encrypt certificate with HTTP-01 webroot validation,
+renders systemd and nginx config, and enables both services. It still requires
+an existing A record pointing `rssh_domain` at the VPS, open `80/tcp` and
+`443/tcp`, SoftEther/internal reachability to `backend_reverse_ssh_url`, and
+`nginx_edge_acme_email`. PTR is useful for operations hygiene but is not used
+for ACME validation. Wildcard certificates are not supported by this HTTP-01
+flow; use DNS-01 if wildcard certificates are required. Do not run
+`certbot --nginx` against this entrypoint because Ansible owns the nginx
+configuration.
 See [../deploy/ansible/README.md](../deploy/ansible/README.md) for all
 variables and rollback commands.
 

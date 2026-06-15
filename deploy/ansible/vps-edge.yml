@@ -17,8 +17,14 @@
     nginx_edge_conf_path: /etc/nginx/sites-available/rssh-entrypoint.conf
     nginx_edge_sites_enabled_dir: /etc/nginx/sites-enabled
     nginx_edge_remove_default_site: true
+    nginx_edge_acme_enabled: true
+    nginx_edge_acme_email: ""
+    nginx_edge_acme_webroot: /var/www/letsencrypt
+    nginx_edge_acme_staging: false
     nginx_edge_create_self_signed_cert: false
     nginx_edge_self_signed_days: 30
+    tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
+    tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
     redirect_target: https://example.com
     rssh_ws_path: /ws
     rssh_push_path: /push
@@ -45,7 +51,19 @@
           - rssh_push_path != '/'
           - rssh_ws_path[-1] != '/'
           - rssh_push_path[-1] != '/'
+          - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: Fill deploy/ansible/group_vars/vps_edge.yml before running this playbook.
+
+    - name: Validate ACME variables
+      ansible.builtin.assert:
+        that:
+          - nginx_edge_acme_email is defined
+          - nginx_edge_acme_email | length > 3
+          - "'@' in nginx_edge_acme_email"
+          - nginx_edge_acme_webroot is defined
+          - nginx_edge_acme_webroot | length > 1
+        fail_msg: Set nginx_edge_acme_email and nginx_edge_acme_webroot for Let's Encrypt HTTP-01 issuance.
+      when: nginx_edge_acme_enabled | bool
 
     - name: Validate production certificate paths
       ansible.builtin.assert:
@@ -69,6 +87,79 @@
         update_cache: true
         state: present
       when: ansible_os_family == 'Debian'
+
+    - name: Install snapd for Certbot
+      ansible.builtin.apt:
+        name: snapd
+        state: present
+      when:
+        - ansible_os_family == 'Debian'
+        - nginx_edge_acme_enabled | bool
+
+    - name: Enable snapd socket
+      ansible.builtin.systemd:
+        name: snapd.socket
+        enabled: true
+        state: started
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Wait for snapd seed
+      ansible.builtin.command:
+        argv:
+          - snap
+          - wait
+          - system
+          - seed.loaded
+      changed_when: false
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Install snap core
+      ansible.builtin.command:
+        argv:
+          - snap
+          - install
+          - core
+      register: snap_core_install
+      changed_when:
+        - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
+        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+      failed_when:
+        - snap_core_install.rc != 0
+        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Refresh snap core
+      ansible.builtin.command:
+        argv:
+          - snap
+          - refresh
+          - core
+      changed_when: false
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Install Certbot snap
+      ansible.builtin.command:
+        argv:
+          - snap
+          - install
+          - --classic
+          - certbot
+      register: certbot_snap_install
+      changed_when:
+        - "'installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+        - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+      failed_when:
+        - certbot_snap_install.rc != 0
+        - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Link Certbot into /usr/bin
+      ansible.builtin.file:
+        src: /snap/bin/certbot
+        dest: /usr/bin/certbot
+        state: link
+        force: true
+      when: nginx_edge_acme_enabled | bool
 
   tasks:
     - name: Create repository parent directory
@@ -132,6 +223,20 @@
         - /var/lib/reverse-logger
         - "{{ nginx_edge_spool_dir }}"
 
+    - name: Create ACME webroot
+      ansible.builtin.file:
+        path: "{{ nginx_edge_acme_webroot }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check existing TLS certificate
+      ansible.builtin.stat:
+        path: "{{ tls_cert_path }}"
+      register: tls_certificate
+      when: nginx_edge_acme_enabled | bool
+
     - name: Create self-signed TLS directory
       ansible.builtin.file:
         path: "{{ item | dirname }}"
@@ -165,6 +270,143 @@
       args:
         creates: "{{ tls_cert_path }}"
       when: nginx_edge_create_self_signed_cert | bool
+
+    - name: Render ACME bootstrap nginx configuration
+      ansible.builtin.template:
+        src: rssh-acme-bootstrap.conf.j2
+        dest: "{{ nginx_edge_conf_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+
+    - name: Enable nginx entrypoint site for ACME bootstrap
+      ansible.builtin.file:
+        src: "{{ nginx_edge_conf_path }}"
+        dest: "{{ nginx_edge_sites_enabled_dir }}/{{ nginx_edge_conf_path | basename }}"
+        state: link
+        force: true
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+
+    - name: Remove default nginx site before ACME bootstrap
+      ansible.builtin.file:
+        path: "{{ nginx_edge_sites_enabled_dir }}/default"
+        state: absent
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+        - nginx_edge_remove_default_site | bool
+
+    - name: Validate ACME bootstrap nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+
+    - name: Enable and start nginx for ACME bootstrap
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+
+    - name: Reload nginx for ACME bootstrap
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      when:
+        - nginx_edge_acme_enabled | bool
+        - not (tls_certificate.stat.exists | default(false))
+
+    - name: Render nginx entrypoint configuration before ACME renewal
+      ansible.builtin.template:
+        src: rssh-wss-https-entrypoint.conf.j2
+        dest: "{{ nginx_edge_conf_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+
+    - name: Enable nginx entrypoint site before ACME renewal
+      ansible.builtin.file:
+        src: "{{ nginx_edge_conf_path }}"
+        dest: "{{ nginx_edge_sites_enabled_dir }}/{{ nginx_edge_conf_path | basename }}"
+        state: link
+        force: true
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+
+    - name: Remove default nginx site before ACME renewal
+      ansible.builtin.file:
+        path: "{{ nginx_edge_sites_enabled_dir }}/default"
+        state: absent
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+        - nginx_edge_remove_default_site | bool
+
+    - name: Validate nginx configuration before ACME renewal
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+
+    - name: Enable and start nginx before ACME renewal
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+
+    - name: Reload nginx before ACME renewal
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      when:
+        - nginx_edge_acme_enabled | bool
+        - tls_certificate.stat.exists | default(false)
+
+    - name: Issue or renew Let's Encrypt certificate
+      ansible.builtin.command:
+        argv: "{{ ['certbot', 'certonly', '--webroot', '-w', nginx_edge_acme_webroot, '-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive', '--keep-until-expiring'] + (nginx_edge_acme_staging | bool | ternary(['--staging'], [])) }}"
+      register: certbot_issue
+      changed_when: "(certbot_issue.stdout + certbot_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Create Certbot renewal hook directory
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Install nginx reload renewal hook
+      ansible.builtin.copy:
+        dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -eu
+          nginx -t
+          systemctl reload nginx
+      when: nginx_edge_acme_enabled | bool
 
     - name: Render nginx-edge-forwarder environment
       ansible.builtin.template:

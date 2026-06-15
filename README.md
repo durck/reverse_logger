@@ -10,7 +10,7 @@ It contains:
 - Local `reverse_ssh` image build helper that can clone a repository or use a
   manually prepared checkout.
 - systemd, SoftEther/DNAT, iptables, Ansible, and Telegram proxy examples.
-- nginx WSS/HTTPS VPS entrypoint with central ingress correlation.
+- nginx WSS/HTTPS VPS entrypoint with Let's Encrypt ACME automation and central ingress correlation.
 - manual deployment and operations documentation.
 
 Start with [docs/manual-deploy.md](docs/manual-deploy.md).

@@ -60,11 +60,23 @@ ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
 ```
 
 The playbook installs nginx, clones `reverse_logger`, builds
-`nginx-edge-forwarder`, renders nginx from the same WSS/HTTPS semantics as this
-document, and enables both services. It intentionally does not create DNS,
-production ACME certificates, SoftEther accounts, or the main `reverse_ssh`
-listener. See [../deploy/ansible/README.md](../deploy/ansible/README.md) for
-the variable list and self-signed smoke mode.
+`nginx-edge-forwarder`, issues a free Let's Encrypt certificate through
+HTTP-01 webroot validation, renders nginx from the same WSS/HTTPS semantics as
+this document, and enables both services. It intentionally does not create DNS,
+PTR records, cloud firewall rules, SoftEther accounts, or the main
+`reverse_ssh` listener. See [../deploy/ansible/README.md](../deploy/ansible/README.md)
+for the variable list, staging mode, and self-signed smoke mode.
+
+ACME prerequisites:
+
+- `rssh_domain` must already have an A record pointing at the VPS public IP.
+- Public `80/tcp` must be reachable for HTTP-01 validation; `443/tcp` remains
+  the WSS/HTTPS transport entrypoint.
+- PTR is operational hygiene only and is not part of certificate validation.
+- This HTTP-01 flow does not issue wildcard certificates; use DNS-01 for
+  wildcard names.
+- Do not run `certbot --nginx`; this repository keeps nginx configuration
+  owned by Ansible and uses `certbot certonly --webroot`.
 
 ## VPS Nginx
 
@@ -83,7 +95,36 @@ Edit:
 - certificate paths
 - `proxy_pass https://192.0.2.10:3232`
 - redirect target
+- port `80/tcp` webroot path if using HTTP-01 manually
 - `/ws` and `/push` paths if using a patched `reverse_ssh` with custom paths
+
+For first manual Let's Encrypt issuance, use the temporary HTTP-only bootstrap
+template before enabling the final `443 ssl` config:
+
+```sh
+sudo mkdir -p /var/www/letsencrypt
+sudo cp deploy/nginx/rssh-acme-bootstrap.conf.example \
+  /etc/nginx/sites-available/rssh-entrypoint.conf
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+Then run:
+
+```sh
+sudo certbot certonly --webroot \
+  -w /var/www/letsencrypt \
+  -d secret-entry.example.com \
+  --email admin@example.com \
+  --agree-tos \
+  --non-interactive \
+  --keep-until-expiring
+```
+
+After the certificate exists, replace the bootstrap config with
+`deploy/nginx/rssh-wss-https-entrypoint.conf.example`, validate nginx, and
+reload.
 
 Validate and reload:
 
