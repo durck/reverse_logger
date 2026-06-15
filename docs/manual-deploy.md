@@ -2,16 +2,27 @@
 
 This runbook assumes fresh Ubuntu 22.04 LTS or 24.04 LTS servers.
 
+Repository references:
+
+- `reverse_logger`: <https://github.com/durck/reverse_logger>
+- `reverse_ssh`: <https://github.com/durck/reverse_ssh>
+
 Topology:
 
 ```text
 external client -> VPS public IP:443 -> VPS SoftEther interface -> main internal IP:3232 -> reverse_ssh
 ```
 
+For WSS/HTTPS public transports, nginx terminates public TLS on the VPS and
+proxies only the configured transport paths to the same internal
+`reverse_ssh` target. Raw DNAT remains a fallback for raw TCP-style exposure.
+
 The main server does not need a SoftEther interface. It only needs a
 private/internal address reachable from the VPS through the existing SoftEther
 network path. SoftEther installation and account provisioning are intentionally
-out of scope because they are handled by deployment automation.
+out of scope because they are handled by deployment automation. The Ansible
+playbook in `deploy/ansible/` automates the nginx edge host after DNS, TLS,
+SoftEther reachability, and central logger values are known.
 
 Replace all example addresses, tokens, image names, and interface names before
 applying commands.
@@ -130,7 +141,7 @@ If you want the helper to clone the repository, set `REVERSE_SSH_REPO_URL` in
 `.env` first:
 
 ```text
-REVERSE_SSH_REPO_URL=https://github.com/example/reverse_ssh.git
+REVERSE_SSH_REPO_URL=https://github.com/durck/reverse_ssh.git
 REVERSE_SSH_REPO_REF=main
 REVERSE_SSH_SOURCE_DIR=/opt/reverse-logger/src/reverse_ssh
 REVERSE_SSH_IMAGE=reverse-ssh:local
@@ -141,7 +152,7 @@ the repository to `REVERSE_SSH_SOURCE_DIR`:
 
 ```sh
 mkdir -p /opt/reverse-logger/src
-git clone <reverse_ssh_repo_url> /opt/reverse-logger/src/reverse_ssh
+git clone https://github.com/durck/reverse_ssh.git /opt/reverse-logger/src/reverse_ssh
 ```
 
 Build the local image:
@@ -344,6 +355,42 @@ instead of raw DNAT or `edge-logger`.
 This path logs only WSS handshakes and HTTPS polling init requests on the VPS,
 forwards them to `/ingress-events/<EDGE_FORWARD_TOKEN>`, and keeps the
 `reverse_ssh` webhook as the canonical connected/disconnected source.
+
+Keep these values identical across the stack:
+
+- nginx public `rssh_ws_path` / `rssh_push_path`;
+- VPS forwarder `RSSH_WS_PATH` / `RSSH_PUSH_PATH`;
+- central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`;
+- `reverse_ssh` server/client `--ws-path` / `--push-path` or baked client
+  values from `link --ws-path` / `link --push-path`.
+
+Use absolute base paths without a trailing slash, for example `/ws`,
+`/rssh-ws`, `/push`, or `/rssh-push`.
+
+When nginx is in front of `reverse_ssh`, run the patched server with
+`--trusted-proxy-cidr <vps_internal_ip>/32` or a narrower CIDR that contains
+only trusted VPS nginx sources. The nginx route overwrites `X-Real-IP` and
+`X-Forwarded-For` with `$remote_addr`; do not accept those headers from
+untrusted sources.
+
+## 10b. Automated Nginx WSS/HTTPS VPS Entrypoint
+
+For a clean VPS edge rollout, use the Ansible playbook:
+
+```sh
+cp deploy/ansible/inventory.example.ini deploy/ansible/inventory.ini
+cp deploy/ansible/group_vars/vps_edge.example.yml deploy/ansible/group_vars/vps_edge.yml
+nano deploy/ansible/inventory.ini
+nano deploy/ansible/group_vars/vps_edge.yml
+ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
+```
+
+The playbook installs nginx, builds `nginx-edge-forwarder`, renders systemd and
+nginx config, and enables both services. It still requires existing DNS,
+SoftEther/internal reachability to `backend_reverse_ssh_url`, and production
+TLS certificate paths unless the documented self-signed smoke mode is enabled.
+See [../deploy/ansible/README.md](../deploy/ansible/README.md) for all
+variables and rollback commands.
 
 ## 11. Configure Telegram Proxy
 

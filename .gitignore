@@ -6,3 +6,6 @@ dist/
 *.jsonl
 *.log
 *.exe
+deploy/ansible/inventory.ini
+deploy/ansible/group_vars/vps_edge.yml
+*.retry

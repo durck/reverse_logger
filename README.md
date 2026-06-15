@@ -9,7 +9,7 @@ It contains:
 - Docker Compose for main-server services.
 - Local `reverse_ssh` image build helper that can clone a repository or use a
   manually prepared checkout.
-- systemd, SoftEther/DNAT, iptables, and Telegram proxy examples.
+- systemd, SoftEther/DNAT, iptables, Ansible, and Telegram proxy examples.
 - nginx WSS/HTTPS VPS entrypoint with central ingress correlation.
 - manual deployment and operations documentation.
 
@@ -26,3 +26,5 @@ interface.
 
 For HTTPS-looking public entrypoints, see
 [docs/nginx-wss-https-entrypoint.md](docs/nginx-wss-https-entrypoint.md).
+For automated nginx edge rollout on a clean VPS, see
+[deploy/ansible/README.md](deploy/ansible/README.md).

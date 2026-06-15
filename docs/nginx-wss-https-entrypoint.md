@@ -4,6 +4,11 @@ Use this when the public VPS should look like a normal HTTPS endpoint while
 forwarding `reverse_ssh` web transports to the main server over the internal
 SoftEther path.
 
+Repository references:
+
+- `reverse_logger`: <https://github.com/durck/reverse_logger>
+- `reverse_ssh`: <https://github.com/durck/reverse_ssh>
+
 Supported transports:
 
 - WSS: `GET /ws` with `Upgrade: websocket`.
@@ -40,7 +45,26 @@ If you change public transport paths, configure all three places consistently:
 The central logger validates ingress payloads against these paths and rejects
 wrong-path or malformed polling-key events even when the forwarding token is
 valid. `INGRESS_WS_PATH` defaults to `/ws`; `INGRESS_PUSH_PATH` defaults to
-`/push`.
+`/push`. Custom paths must be absolute base paths without a trailing slash.
+
+## Automated VPS Deployment
+
+Use `deploy/ansible/vps-edge.yml` for a clean Ubuntu VPS:
+
+```sh
+cp deploy/ansible/inventory.example.ini deploy/ansible/inventory.ini
+cp deploy/ansible/group_vars/vps_edge.example.yml deploy/ansible/group_vars/vps_edge.yml
+nano deploy/ansible/inventory.ini
+nano deploy/ansible/group_vars/vps_edge.yml
+ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
+```
+
+The playbook installs nginx, clones `reverse_logger`, builds
+`nginx-edge-forwarder`, renders nginx from the same WSS/HTTPS semantics as this
+document, and enables both services. It intentionally does not create DNS,
+production ACME certificates, SoftEther accounts, or the main `reverse_ssh`
+listener. See [../deploy/ansible/README.md](../deploy/ansible/README.md) for
+the variable list and self-signed smoke mode.
 
 ## VPS Nginx
 

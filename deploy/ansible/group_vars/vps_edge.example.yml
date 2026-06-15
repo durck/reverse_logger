@@ -1,0 +1,33 @@
+reverse_logger_repo_url: https://github.com/durck/reverse_logger.git
+reverse_logger_repo_version: main
+reverse_logger_src_dir: /opt/reverse-logger
+
+rssh_domain: secret-entry.example.com
+backend_reverse_ssh_url: https://192.0.2.10:3232
+redirect_target: https://example.com
+
+edge_forward_url: http://192.0.2.10:8080/ingress-events
+edge_forward_token: replace_with_EDGE_FORWARD_TOKEN
+
+vps_name: vps-1
+vps_public_ip: 198.51.100.10
+vps_internal_ip: 192.0.2.2
+
+rssh_ws_path: /ws
+rssh_push_path: /push
+
+tls_cert_path: /etc/letsencrypt/live/secret-entry.example.com/fullchain.pem
+tls_key_path: /etc/letsencrypt/live/secret-entry.example.com/privkey.pem
+nginx_edge_create_self_signed_cert: false
+nginx_edge_self_signed_days: 30
+
+nginx_edge_listen_addr: 127.0.0.1:18080
+nginx_edge_capture_mode: mirror
+nginx_edge_log_path: ""
+nginx_edge_spool_dir: /var/lib/reverse-logger/nginx-edge-spool
+nginx_edge_forward_interval: 1s
+nginx_edge_forward_timeout: 5s
+
+nginx_edge_conf_path: /etc/nginx/sites-available/rssh-entrypoint.conf
+nginx_edge_sites_enabled_dir: /etc/nginx/sites-enabled
+nginx_edge_remove_default_site: true

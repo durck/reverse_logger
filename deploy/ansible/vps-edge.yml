@@ -1,0 +1,248 @@
+---
+- name: Deploy reverse_ssh nginx edge entrypoint
+  hosts: vps_edge
+  become: true
+  gather_facts: true
+
+  vars:
+    reverse_logger_repo_url: https://github.com/durck/reverse_logger.git
+    reverse_logger_repo_version: main
+    reverse_logger_src_dir: /opt/reverse-logger
+    nginx_edge_listen_addr: 127.0.0.1:18080
+    nginx_edge_capture_mode: mirror
+    nginx_edge_log_path: ""
+    nginx_edge_spool_dir: /var/lib/reverse-logger/nginx-edge-spool
+    nginx_edge_forward_interval: 1s
+    nginx_edge_forward_timeout: 5s
+    nginx_edge_conf_path: /etc/nginx/sites-available/rssh-entrypoint.conf
+    nginx_edge_sites_enabled_dir: /etc/nginx/sites-enabled
+    nginx_edge_remove_default_site: true
+    nginx_edge_create_self_signed_cert: false
+    nginx_edge_self_signed_days: 30
+    redirect_target: https://example.com
+    rssh_ws_path: /ws
+    rssh_push_path: /push
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - rssh_domain is defined
+          - rssh_domain | length > 0
+          - backend_reverse_ssh_url is defined
+          - backend_reverse_ssh_url | length > 0
+          - edge_forward_url is defined
+          - edge_forward_url | length > 0
+          - edge_forward_token is defined
+          - edge_forward_token | length > 20
+          - edge_forward_token != 'replace_with_EDGE_FORWARD_TOKEN'
+          - vps_name is defined
+          - vps_public_ip is defined
+          - vps_internal_ip is defined
+          - rssh_ws_path is match('^/.+')
+          - rssh_push_path is match('^/.+')
+          - rssh_ws_path != '/'
+          - rssh_push_path != '/'
+          - rssh_ws_path[-1] != '/'
+          - rssh_push_path[-1] != '/'
+        fail_msg: Fill deploy/ansible/group_vars/vps_edge.yml before running this playbook.
+
+    - name: Validate production certificate paths
+      ansible.builtin.assert:
+        that:
+          - tls_cert_path is defined
+          - tls_cert_path | length > 0
+          - tls_key_path is defined
+          - tls_key_path | length > 0
+        fail_msg: Set tls_cert_path/tls_key_path or enable nginx_edge_create_self_signed_cert for smoke tests.
+      when: not nginx_edge_create_self_signed_cert | bool
+
+    - name: Install OS packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - git
+          - golang-go
+          - nginx
+          - openssl
+        update_cache: true
+        state: present
+      when: ansible_os_family == 'Debian'
+
+  tasks:
+    - name: Create repository parent directory
+      ansible.builtin.file:
+        path: "{{ reverse_logger_src_dir | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Clone reverse_logger repository
+      ansible.builtin.git:
+        repo: "{{ reverse_logger_repo_url }}"
+        dest: "{{ reverse_logger_src_dir }}"
+        version: "{{ reverse_logger_repo_version }}"
+        update: true
+
+    - name: Build nginx-edge-forwarder
+      ansible.builtin.command:
+        argv:
+          - go
+          - build
+          - -trimpath
+          - -ldflags
+          - -s -w
+          - -o
+          - /tmp/nginx-edge-forwarder
+          - ./cmd/nginx-edge-forwarder
+      args:
+        chdir: "{{ reverse_logger_src_dir }}"
+      environment:
+        CGO_ENABLED: "0"
+      changed_when: true
+
+    - name: Install nginx-edge-forwarder binary
+      ansible.builtin.copy:
+        remote_src: true
+        src: /tmp/nginx-edge-forwarder
+        dest: /usr/local/bin/nginx-edge-forwarder
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart nginx-edge-forwarder
+
+    - name: Create reverse_logger config directory
+      ansible.builtin.file:
+        path: /etc/reverse-logger
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Create reverse_logger state directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - /var/lib/reverse-logger
+        - "{{ nginx_edge_spool_dir }}"
+
+    - name: Create self-signed TLS directory
+      ansible.builtin.file:
+        path: "{{ item | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - "{{ tls_cert_path }}"
+        - "{{ tls_key_path }}"
+      when: nginx_edge_create_self_signed_cert | bool
+
+    - name: Generate self-signed TLS certificate for smoke tests
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - rsa:4096
+          - -nodes
+          - -sha256
+          - -days
+          - "{{ nginx_edge_self_signed_days | string }}"
+          - -subj
+          - "/CN={{ rssh_domain }}"
+          - -keyout
+          - "{{ tls_key_path }}"
+          - -out
+          - "{{ tls_cert_path }}"
+      args:
+        creates: "{{ tls_cert_path }}"
+      when: nginx_edge_create_self_signed_cert | bool
+
+    - name: Render nginx-edge-forwarder environment
+      ansible.builtin.template:
+        src: nginx-edge-forwarder.env.j2
+        dest: /etc/reverse-logger/nginx-edge-forwarder.env
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Restart nginx-edge-forwarder
+
+    - name: Install nginx-edge-forwarder systemd unit
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ reverse_logger_src_dir }}/deploy/systemd/nginx-edge-forwarder.service"
+        dest: /etc/systemd/system/nginx-edge-forwarder.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart nginx-edge-forwarder
+
+    - name: Render nginx entrypoint configuration
+      ansible.builtin.template:
+        src: rssh-wss-https-entrypoint.conf.j2
+        dest: "{{ nginx_edge_conf_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: Enable nginx entrypoint site
+      ansible.builtin.file:
+        src: "{{ nginx_edge_conf_path }}"
+        dest: "{{ nginx_edge_sites_enabled_dir }}/{{ nginx_edge_conf_path | basename }}"
+        state: link
+        force: true
+      notify: Reload nginx
+
+    - name: Remove default nginx site
+      ansible.builtin.file:
+        path: "{{ nginx_edge_sites_enabled_dir }}/default"
+        state: absent
+      when: nginx_edge_remove_default_site | bool
+      notify: Reload nginx
+
+    - name: Validate nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Enable and start nginx
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+
+    - name: Reload systemd after unit installation
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start nginx-edge-forwarder
+      ansible.builtin.systemd:
+        name: nginx-edge-forwarder
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Restart nginx-edge-forwarder
+      ansible.builtin.systemd:
+        name: nginx-edge-forwarder
+        state: restarted

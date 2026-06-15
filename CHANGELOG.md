@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add Ansible playbook and deployment documentation for clean VPS nginx WSS/HTTPS edge rollout.
 - Add nginx WSS/HTTPS VPS ingress forwarding with central raw ingress and enriched event journals.
 - Add local `reverse_ssh` image build helper for clone-or-manual source workflows.
 - Document clean-Ubuntu deployment steps for main and VPS hosts, with SoftEther provisioning left to external automation.
