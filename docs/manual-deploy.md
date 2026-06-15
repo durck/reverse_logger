@@ -7,10 +7,10 @@ Repository references:
 - `reverse_logger`: <https://github.com/durck/reverse_logger>
 - `reverse_ssh`: <https://github.com/durck/reverse_ssh>
 
-Topology:
+Default WSS/HTTPS topology:
 
 ```text
-external client -> VPS public IP:443 -> VPS SoftEther interface -> main internal IP:3232 -> reverse_ssh
+external client -> VPS nginx :443 -> VPS SoftEther/internal route -> main internal IP:3232 -> reverse_ssh
 ```
 
 For WSS/HTTPS public transports, nginx terminates public TLS on the VPS and
@@ -20,10 +20,10 @@ proxies only the configured transport paths to the same internal
 The main server does not need a SoftEther interface. It only needs a
 private/internal address reachable from the VPS through the existing SoftEther
 network path. SoftEther installation and account provisioning are intentionally
-out of scope because they are handled by deployment automation. The Ansible
-playbook in `deploy/ansible/` automates the nginx edge host after DNS,
-SoftEther reachability, open `80/tcp` and `443/tcp`, and central logger values
-are known.
+out of scope because they are handled before this runbook starts. This manual
+runbook configures the main stack, the VPS nginx edge, TLS, and client
+generation by hand. The Ansible playbook in `deploy/ansible/` is only an
+optional automation path for the same VPS nginx edge.
 
 Replace all example addresses, tokens, image names, and interface names before
 applying commands.
@@ -132,8 +132,9 @@ Set at minimum:
 - `REVERSE_SSH_BIND_PORT`: internal target port, normally `3232`.
 - `REVERSE_SSH_EXTERNAL_ADDRESS`: public VPS entrypoint, for example
   `vps-entrypoint.example.com:443`.
-- `REVERSE_SSH_PUBLIC_PORT`: public VPS entrypoint port; keep it aligned with
-  the VPS DNAT `PUBLIC_PORT`.
+- `REVERSE_SSH_PUBLIC_PORT`: public VPS entrypoint port, normally `443`. For
+  nginx WSS/HTTPS this is the public nginx port; for the raw DNAT fallback,
+  keep it aligned with the VPS DNAT `PUBLIC_PORT`.
 - `REVERSE_SSH_WS_PATH` / `REVERSE_SSH_PUSH_PATH`: listener web transport
   paths. Keep them aligned with nginx, `nginx-edge-forwarder`, central
   `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`, and generated clients.
@@ -148,8 +149,8 @@ Set at minimum:
 - `SEED_AUTHORIZED_KEYS`: `reverse_ssh` operator public key contents, not a
   file path and not the private key.
 - `WEBHOOK_TOKEN`: first generated token.
-- `EDGE_FORWARD_TOKEN`: second generated token if optional edge forwarding is
-  used.
+- `EDGE_FORWARD_TOKEN`: second generated token used by VPS nginx edge
+  forwarders for central ingress events.
 - `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`: central validation paths for nginx
   ingress events. Keep them aligned with VPS nginx and `nginx-edge-forwarder`
   `RSSH_WS_PATH` / `RSSH_PUSH_PATH`; defaults are `/ws` and `/push`.
@@ -218,12 +219,30 @@ sudo chown -R "$APP_UID:$APP_GID" "$LOGGER_DIR"
 sudo chmod 750 "$LOGGER_DIR"
 ```
 
-Start the stack:
+Start the stack. For the nginx WSS/HTTPS VPS edge path, include
+`docker-compose.edge-forward.yml`; otherwise the central `rssh-logger` is only
+reachable inside the Docker network and the VPS `nginx-edge-forwarder` cannot
+POST ingress events to it:
 
 ```sh
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
 docker compose ps
 ```
+
+This publishes `rssh-logger` on the main server internal bind address:
+
+```text
+http://<REVERSE_SSH_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events
+```
+
+With the example values, the VPS forwarder should use:
+
+```text
+NGINX_EDGE_FORWARD_URL=http://192.0.2.10:8080/ingress-events
+```
+
+If you are not using VPS ingress forwarding, plain `docker compose up -d` is
+enough.
 
 The Docker entrypoint starts the `reverse_ssh` listener from `.env`. With the
 default paths, it is equivalent to:
@@ -339,12 +358,195 @@ reachability:
 ip -br addr
 ip route
 nc -vz 192.0.2.10 3232
+nc -vz 192.0.2.10 8080
 ```
 
 In the examples below, `vpn_softether` is the VPS SoftEther interface and
 `192.0.2.10:3232` is the main `reverse_ssh` target.
+`192.0.2.10:8080` is the central `rssh-logger` ingress endpoint exposed by
+`docker-compose.edge-forward.yml`.
 
-## 8. Apply VPS DNAT
+## 8. Deploy Nginx WSS/HTTPS VPS Entrypoint
+
+This is the normal next step for the WSS/HTTPS setup after VPS tooling and
+SoftEther reachability are ready. Nginx accepts public `443/tcp`, terminates
+TLS, filters the public WSS/HTTPS paths, logs ingress, and proxies matching
+transport requests to the internal `reverse_ssh` listener.
+
+Do not apply the raw DNAT fallback from step 9 for this mode. The nginx route
+uses `proxy_pass` to the internal `reverse_ssh` target instead of public-port
+DNAT.
+
+Run the remaining commands in this step on the VPS.
+
+Install nginx, Go, Snap, and Certbot:
+
+```sh
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx golang-go snapd
+sudo snap install core
+sudo snap refresh core
+sudo snap install --classic certbot
+sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+```
+
+Clone this repository on the VPS:
+
+```sh
+sudo mkdir -p /opt/reverse-logger
+sudo chown "$USER:$USER" /opt/reverse-logger
+git clone https://github.com/durck/reverse_logger.git /opt/reverse-logger
+cd /opt/reverse-logger
+```
+
+Install the edge forwarder:
+
+```sh
+go build -trimpath -ldflags="-s -w" -o /tmp/nginx-edge-forwarder ./cmd/nginx-edge-forwarder
+sudo install -m 0755 /tmp/nginx-edge-forwarder /usr/local/bin/nginx-edge-forwarder
+```
+
+Create the forwarder config and edit all VPS-specific values:
+
+```sh
+sudo mkdir -p /etc/reverse-logger
+sudo cp deploy/systemd/nginx-edge-forwarder.env.example /etc/reverse-logger/nginx-edge-forwarder.env
+sudo nano /etc/reverse-logger/nginx-edge-forwarder.env
+```
+
+Set at minimum:
+
+- `NGINX_EDGE_FORWARD_URL`: central ingress URL, normally
+  `http://<REVERSE_SSH_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events`.
+- `EDGE_FORWARD_TOKEN`: `EDGE_FORWARD_TOKEN` from the main `.env`.
+- `VPS_NAME`, `VPS_PUBLIC_IP`, `VPS_INTERNAL_IP`.
+- `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, matching the main `.env`.
+
+Install the systemd unit, but start it only after nginx is configured:
+
+```sh
+sudo cp deploy/systemd/nginx-edge-forwarder.service /etc/systemd/system/nginx-edge-forwarder.service
+sudo systemctl daemon-reload
+```
+
+Create the ACME webroot and apply the temporary HTTP-only nginx config:
+
+```sh
+sudo mkdir -p /var/www/letsencrypt
+sudo cp deploy/nginx/rssh-acme-bootstrap.conf.example \
+  /etc/nginx/sites-available/rssh-entrypoint.conf
+sudo ln -sf /etc/nginx/sites-available/rssh-entrypoint.conf \
+  /etc/nginx/sites-enabled/rssh-entrypoint.conf
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nano /etc/nginx/sites-available/rssh-entrypoint.conf
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+In the bootstrap config, set:
+
+- `server_name` to the public FQDN whose A record points at this VPS.
+- `return 301 ...` to the decoy `redirect_target`.
+
+Issue the Let's Encrypt certificate with HTTP-01 webroot validation:
+
+```sh
+sudo certbot certonly --webroot \
+  -w /var/www/letsencrypt \
+  -d <rssh_domain> \
+  --email <admin_email> \
+  --agree-tos \
+  --non-interactive \
+  --keep-until-expiring
+```
+
+Install a renewal hook so nginx reloads after certificate renewal:
+
+```sh
+sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null <<'EOF'
+#!/bin/sh
+set -eu
+nginx -t
+systemctl reload nginx
+EOF
+sudo chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+Apply the final HTTPS entrypoint config:
+
+```sh
+sudo cp deploy/nginx/rssh-wss-https-entrypoint.conf.example \
+  /etc/nginx/sites-available/rssh-entrypoint.conf
+sudo nano /etc/nginx/sites-available/rssh-entrypoint.conf
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl enable --now nginx-edge-forwarder
+```
+
+In the final config, set:
+
+- every `server_name` to `rssh_domain`;
+- `ssl_certificate` and `ssl_certificate_key` to
+  `/etc/letsencrypt/live/<rssh_domain>/fullchain.pem` and
+  `/etc/letsencrypt/live/<rssh_domain>/privkey.pem`;
+- every `proxy_pass https://192.0.2.10:3232` to the main internal
+  `reverse_ssh` listener;
+- every decoy redirect to `redirect_target`;
+- `/ws`, `/push`, and `/push/` plus the top `map` rules if custom public paths
+  are used.
+
+Verify the VPS edge:
+
+```sh
+sudo systemctl status nginx nginx-edge-forwarder --no-pager
+sudo journalctl -u nginx-edge-forwarder -n 100 --no-pager
+sudo tail -n 20 /var/log/nginx/reverse_ssh_ingress.json
+curl -I http://<rssh_domain>/.well-known/acme-challenge/test || true
+```
+
+From any external host, verify TLS and the decoy redirect:
+
+```sh
+openssl s_client -connect <rssh_domain>:443 -servername <rssh_domain> </dev/null
+curl -I https://<rssh_domain>/not-a-transport-path
+```
+
+This manual flow requires an existing A record pointing `rssh_domain` at the
+VPS, open `80/tcp` and `443/tcp`, SoftEther/internal reachability to the main
+`reverse_ssh` listener, and an email for Let's Encrypt. PTR is useful for
+operations hygiene but is not used for ACME validation. Wildcard certificates
+are not supported by this HTTP-01 flow; use DNS-01 if wildcard certificates
+are required.
+
+Keep these values identical across the stack:
+
+- nginx public `rssh_ws_path` / `rssh_push_path`;
+- VPS forwarder `RSSH_WS_PATH` / `RSSH_PUSH_PATH`;
+- central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`;
+- main `reverse_ssh` listener `REVERSE_SSH_WS_PATH` /
+  `REVERSE_SSH_PUSH_PATH`;
+- generated clients from `link --ws-path` / `link --push-path`.
+
+Use absolute base paths without a trailing slash, for example `/ws`,
+`/rssh-ws`, `/push`, or `/rssh-push`.
+
+When nginx is in front of `reverse_ssh`, set
+`REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32` or a narrower CIDR that
+contains only trusted VPS nginx sources, then recreate the `reverse_ssh`
+container. The nginx route overwrites `X-Real-IP` and `X-Forwarded-For` with
+`$remote_addr`; do not accept those headers from untrusted sources.
+
+Do not run `certbot --nginx` against this entrypoint because this repository's
+template owns the nginx configuration. If you later want the same nginx edge
+rollout automated, use [../deploy/ansible/README.md](../deploy/ansible/README.md).
+
+## 9. Optional Raw DNAT Fallback
+
+Use this step only when you intentionally want the VPS to forward public
+`443/tcp` directly to the main `reverse_ssh` listener at the TCP layer. This is
+not the nginx WSS/HTTPS edge path.
 
 Clone the repository on the VPS or copy only `deploy/iptables/vps-forward.sh`
 from the main server:
@@ -389,15 +591,17 @@ all non-ACME traffic. Restrict SSH and management access separately.
 See [softether-entrypoint.md](softether-entrypoint.md) for additional DNAT and
 SNAT notes.
 
-## 9. Optional Main Ingress Guard
+## 10. Optional Main Ingress Guard
 
 Apply a default-deny policy on the main server's internal ingress interface if
 that network also carries traffic from untrusted sources. This is not a
 SoftEther interface on the main server; it is the normal interface where the
 VPS-routed traffic arrives.
 
-In the default DNAT-only path, do not set a source allowlist here: the main
-server sees the real internet client IP, not the VPS VPN IP.
+In the raw DNAT-only path, do not set a source allowlist here: the main server
+sees the real internet client IP, not the VPS VPN IP. In the nginx WSS/HTTPS
+path, the backend sees trusted nginx proxy headers only when
+`REVERSE_SSH_TRUSTED_PROXY_CIDR` is set on the main `reverse_ssh` listener.
 
 ```sh
 sudo env \
@@ -426,11 +630,11 @@ Persist only after verifying access:
 sudo netfilter-persistent save
 ```
 
-## 10. Optional edge-logger
+## 11. Optional edge-logger
 
-`edge-logger` is not the default forwarding path in the SoftEther model. Use
-it only if you explicitly need VPS-side connection events and accept a
-user-space TCP proxy in the data path.
+`edge-logger` is not used by the nginx WSS/HTTPS entrypoint. Use it only if
+you explicitly choose a non-nginx TCP proxy path and accept a user-space TCP
+proxy in the data path.
 
 If enabled, point it at the same internal target:
 
@@ -457,71 +661,18 @@ EDGE_FORWARD_URL=http://192.0.2.10:8080/edge-events
 EDGE_FORWARD_TOKEN=<EDGE_FORWARD_TOKEN_FROM_MAIN_ENV>
 ```
 
-## 10a. Optional Nginx WSS/HTTPS Entrypoint
-
-If clients use `wss://` or `https://` transports and the VPS should present a
-normal HTTPS surface, use [nginx-wss-https-entrypoint.md](nginx-wss-https-entrypoint.md)
-instead of raw DNAT or `edge-logger`.
-
-This path logs only WSS handshakes and HTTPS polling init requests on the VPS,
-forwards them to `/ingress-events/<EDGE_FORWARD_TOKEN>`, and keeps the
-`reverse_ssh` webhook as the canonical connected/disconnected source.
-
-Keep these values identical across the stack:
-
-- nginx public `rssh_ws_path` / `rssh_push_path`;
-- VPS forwarder `RSSH_WS_PATH` / `RSSH_PUSH_PATH`;
-- central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`;
-- main `reverse_ssh` listener `REVERSE_SSH_WS_PATH` /
-  `REVERSE_SSH_PUSH_PATH`;
-- generated clients from `link --ws-path` / `link --push-path`.
-
-Use absolute base paths without a trailing slash, for example `/ws`,
-`/rssh-ws`, `/push`, or `/rssh-push`.
-
-When nginx is in front of `reverse_ssh`, set
-`REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32` or a narrower CIDR that
-contains only trusted VPS nginx sources, then recreate the `reverse_ssh`
-container. The nginx route overwrites `X-Real-IP` and `X-Forwarded-For` with
-`$remote_addr`; do not accept those headers from untrusted sources.
-
-## 10b. Automated Nginx WSS/HTTPS VPS Entrypoint
-
-For a clean VPS edge rollout, use the Ansible playbook:
-
-```sh
-cp deploy/ansible/inventory.example.ini deploy/ansible/inventory.ini
-cp deploy/ansible/group_vars/vps_edge.example.yml deploy/ansible/group_vars/vps_edge.yml
-nano deploy/ansible/inventory.ini
-nano deploy/ansible/group_vars/vps_edge.yml
-ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
-```
-
-The playbook installs nginx, Snap Certbot, builds `nginx-edge-forwarder`,
-issues a free Let's Encrypt certificate with HTTP-01 webroot validation,
-renders systemd and nginx config, and enables both services. It still requires
-an existing A record pointing `rssh_domain` at the VPS, open `80/tcp` and
-`443/tcp`, SoftEther/internal reachability to `backend_reverse_ssh_url`, and
-`nginx_edge_acme_email`. PTR is useful for operations hygiene but is not used
-for ACME validation. Wildcard certificates are not supported by this HTTP-01
-flow; use DNS-01 if wildcard certificates are required. Do not run
-`certbot --nginx` against this entrypoint because Ansible owns the nginx
-configuration.
-See [../deploy/ansible/README.md](../deploy/ansible/README.md) for all
-variables and rollback commands.
-
-## 11. Generate Client and Connect Through reverse_ssh
+## 12. Generate Client and Connect Through reverse_ssh
 
 Run this step only after one of the public VPS entrypoint paths is working:
 
-- raw DNAT from steps 7-8; or
-- nginx WSS/HTTPS edge from steps 10a-10b.
+- nginx WSS/HTTPS edge from step 8; or
+- raw DNAT fallback from step 9.
 
 For WSS/HTTPS, the public DNS record, TLS certificate, nginx route, SoftEther
 path, and backend reachability must already be valid. Otherwise the generated
 client will have a correct callback value but no reachable public endpoint.
 
-### 11.1 Connect to the catcher console
+### 12.1 Connect to the catcher console
 
 From the main server, load `.env` and connect:
 
@@ -536,7 +687,7 @@ ssh -i ~/.ssh/reverse_ssh_operator \
   "$REVERSE_SSH_BIND_IP"
 ```
 
-### 11.2 Generate the reverse_ssh client
+### 12.2 Generate the reverse_ssh client
 
 Run inside the catcher console. The `--wss` and `--https` flags bake the
 public transport scheme into the client. `REVERSE_SSH_EXTERNAL_ADDRESS` from
@@ -596,7 +747,7 @@ public transport URL and paths:
 ./client -d https://<rssh-domain>:443 --push-path /push
 ```
 
-### 11.3 Confirm the client is connected
+### 12.3 Confirm the client is connected
 
 Run inside the catcher console:
 
@@ -606,7 +757,7 @@ ls
 
 Use the client id shown by `ls` in the next step.
 
-### 11.4 Connect to the target through reverse_ssh
+### 12.4 Connect to the target through reverse_ssh
 
 Interactive connection from the catcher console:
 
@@ -632,7 +783,7 @@ ssh -i ~/.ssh/reverse_ssh_operator \
   <client-id>
 ```
 
-## 12. Configure Telegram Proxy
+## 13. Configure Telegram Proxy
 
 If the main server cannot reach Telegram directly, configure the proxy on a
 VPS using [telegram-proxy.md](telegram-proxy.md). Then smoke-test from the main
@@ -642,7 +793,7 @@ server:
 curl -x "$TELEGRAM_PROXY_URL" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
 ```
 
-## 13. Smoke Test
+## 14. Smoke Test
 
 Send a sample webhook inside the Compose network:
 
@@ -660,7 +811,24 @@ tail -n 5 /opt/reverse-logger/data/logger/events.jsonl
 sqlite3 /opt/reverse-logger/data/logger/events.db 'select status, host_name, ip_raw, received_at from events order by id desc limit 5;'
 ```
 
-Then test the real path:
+Then test the real public path for the selected entrypoint mode.
+
+For nginx WSS/HTTPS:
+
+1. Confirm `https://<rssh_domain>/not-a-transport-path` redirects to
+   `redirect_target`.
+2. Generate and run a WSS or HTTPS polling client from step 12.
+3. Confirm the reverse_ssh webhook event arrives.
+4. Check central ingress and enriched logs:
+
+```sh
+tail -n 5 /opt/reverse-logger/data/logger/ingress_events.jsonl
+tail -n 5 /opt/reverse-logger/data/logger/enriched_events.jsonl
+sqlite3 /opt/reverse-logger/data/logger/events.db \
+  'select correlation_status, status, reverse_ssh_id, real_client_ip, transport, received_at from enriched_events order by id desc limit 5;'
+```
+
+For the raw DNAT fallback:
 
 1. Connect from outside to `VPS_PUBLIC_IP:443`.
 2. Confirm the reverse_ssh webhook event arrives.
@@ -669,7 +837,7 @@ Then test the real path:
 5. If `ip_raw` is a VPS/VPN IP, either accept that limitation or enable
    optional VPS-side connection logging.
 
-## 14. Optional systemd Installation
+## 15. Optional systemd Installation
 
 After manual validation:
 
