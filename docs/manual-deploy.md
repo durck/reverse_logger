@@ -93,7 +93,7 @@ git clone git@github.com:durck/reverse_logger.git /opt/reverse-logger
 ```sh
 sudo mkdir -p /opt/reverse-logger/data/reverse_ssh
 sudo mkdir -p /opt/reverse-logger/data/logger
-sudo chown -R "$USER:$USER" /opt/reverse-logger/data
+sudo chown -R "$USER:$USER" /opt/reverse-logger/data/reverse_ssh
 
 cd /opt/reverse-logger
 cp .env.example .env
@@ -189,6 +189,32 @@ If the Dockerfile is in a custom location, set `REVERSE_SSH_DOCKERFILE` and
 ```sh
 cd /opt/reverse-logger
 docker compose build rssh-logger
+```
+
+`rssh-logger` runs as the unprivileged `app` user inside its container. The
+host bind mount for `LOGGER_DATA_DIR` must be writable by that container user;
+otherwise SQLite may fail at startup with `unable to open database file: out of
+memory (14)`.
+
+Set the logger data directory owner to the UID/GID from the built image:
+
+```sh
+set -a
+. ./.env
+set +a
+
+LOGGER_DIR="${LOGGER_DATA_DIR:-/opt/reverse-logger/data/logger}"
+APP_UID="$(docker compose run --rm --no-deps --entrypoint sh rssh-logger -c 'id -u' | tr -d '\r')"
+APP_GID="$(docker compose run --rm --no-deps --entrypoint sh rssh-logger -c 'id -g' | tr -d '\r')"
+
+sudo mkdir -p "$LOGGER_DIR"
+sudo chown -R "$APP_UID:$APP_GID" "$LOGGER_DIR"
+sudo chmod 750 "$LOGGER_DIR"
+```
+
+Start the stack:
+
+```sh
 docker compose up -d
 docker compose ps
 ```
