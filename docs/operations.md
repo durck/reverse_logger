@@ -100,6 +100,14 @@ curl -I https://<rssh_domain>/dl/<name>
 A missing link should return a fake nginx 404 from `reverse_ssh`, not a
 `Location:` header to the decoy redirect target.
 
+`nginx-edge-forwarder` fails with `226/NAMESPACE`:
+
+1. Create the spool state directory:
+   `sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool`
+2. Install the current `deploy/systemd/nginx-edge-forwarder.service`
+   (it declares `StateDirectory=` for the same paths).
+3. `sudo systemctl daemon-reload && sudo systemctl restart nginx-edge-forwarder`
+
 `ingress_events.jsonl` is empty but webhooks work:
 
 1. On the VPS, confirm `nginx-edge-forwarder` is active and

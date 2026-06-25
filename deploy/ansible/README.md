@@ -14,6 +14,7 @@ The playbook owns the VPS edge layer only:
 - issues a free Let's Encrypt certificate with HTTP-01 webroot validation;
 - clones `reverse_logger`;
 - builds and installs `cmd/nginx-edge-forwarder`;
+- creates `/var/lib/reverse-logger` and the nginx edge spool directory;
 - renders `/etc/reverse-logger/nginx-edge-forwarder.env`;
 - renders nginx with custom WSS and HTTPS polling paths;
 - enables and starts nginx and `nginx-edge-forwarder`.
@@ -51,6 +52,10 @@ Set at minimum:
 
 Custom paths must be absolute base paths without a trailing slash, for example
 `/ws`, `/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.
+
+The rendered nginx config preserves original transport paths for mirror capture
+with `$rssh_mirror_path`. Do not replace `X-Original-Path $uri` in the capture
+location; mirror subrequests use `/_rssh_ingress_capture` as `$uri`.
 
 Before running:
 

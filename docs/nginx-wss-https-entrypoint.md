@@ -277,13 +277,19 @@ sudo install -m 0755 /tmp/nginx-edge-forwarder /usr/local/bin/nginx-edge-forward
 Install systemd files:
 
 ```sh
-sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool
 sudo cp deploy/systemd/nginx-edge-forwarder.env.example /etc/reverse-logger/nginx-edge-forwarder.env
 sudo cp deploy/systemd/nginx-edge-forwarder.service /etc/systemd/system/nginx-edge-forwarder.service
+sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool
+sudo chmod 750 /var/lib/reverse-logger /var/lib/reverse-logger/nginx-edge-spool
 sudo nano /etc/reverse-logger/nginx-edge-forwarder.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now nginx-edge-forwarder
 ```
+
+`nginx-edge-forwarder.service` also sets `StateDirectory=` for
+`/var/lib/reverse-logger` and the spool subdirectory. The explicit `mkdir`
+avoids `226/NAMESPACE` when an older unit without `StateDirectory=` is still
+installed.
 
 Set `VPS_INTERNAL_IP` to the address the **main server** sees for this VPS on the
 SoftEther path (for example `10.21.125.98`), not the VPS LAN address. The

@@ -426,8 +426,15 @@ Install the systemd unit, but start it only after nginx is configured:
 
 ```sh
 sudo cp deploy/systemd/nginx-edge-forwarder.service /etc/systemd/system/nginx-edge-forwarder.service
+sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool
+sudo chmod 750 /var/lib/reverse-logger /var/lib/reverse-logger/nginx-edge-spool
 sudo systemctl daemon-reload
 ```
+
+The unit also declares `StateDirectory=` for the same paths, so a fresh
+`systemctl enable --now nginx-edge-forwarder` creates them when the explicit
+`mkdir` step was skipped. Without either step, startup fails with
+`226/NAMESPACE` because `ReadWritePaths` requires an existing directory.
 
 Create the ACME webroot and apply the temporary HTTP-only nginx config:
 
