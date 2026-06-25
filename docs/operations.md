@@ -83,6 +83,53 @@ ssh -i ~/.ssh/reverse_ssh_operator -p "${REVERSE_SSH_BIND_PORT:-3232}" "$REVERSE
    WSS/HTTPS nginx endpoint; generated clients use that endpoint, not the
    operator console.
 
+`link` download URL redirects to the decoy site:
+
+1. Confirm nginx proxies the download prefix with a trailing slash on
+   `proxy_pass`, normally `location ^~ /dl/ { proxy_pass http://<main>:3232/; }`.
+   Downloads use plain HTTP to the internal multiplexed listener even when
+   transport paths use `https://` to the same port.
+2. Generate links with `link --name <filename>`; fetch them at
+   `/dl/<filename>`.
+3. Test from outside:
+
+```sh
+curl -I https://<rssh_domain>/dl/<name>
+```
+
+A missing link should return a fake nginx 404 from `reverse_ssh`, not a
+`Location:` header to the decoy redirect target.
+
+`ingress_events.jsonl` is empty but webhooks work:
+
+1. On the VPS, confirm `nginx-edge-forwarder` is active and
+   `curl http://127.0.0.1:18080/capture` returns 202.
+2. From the VPS, confirm the main ingress URL is reachable:
+   `curl http://<main_bind_ip>:8080/healthz`.
+3. On main, include `docker-compose.edge-forward.yml` and set matching
+   `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH` / `EDGE_FORWARD_TOKEN`.
+4. Confirm nginx mirror capture preserves the original transport path with
+   `$rssh_mirror_path` (see `docs/nginx-wss-https-entrypoint.md`).
+5. During a real client connect, check
+   `/var/lib/reverse-logger/nginx-edge-spool/` on the VPS for short-lived
+   `.json` files.
+
+`enriched_events` stays `unmatched`:
+
+1. Confirm `ingress_events.jsonl` receives events for the same session.
+2. Set forwarder `VPS_INTERNAL_IP` to the address main sees in webhook
+   `ip_raw` (SoftEther/VPN source), not the VPS private LAN IP.
+3. Keep `RSSH_WS_PATH` / `RSSH_PUSH_PATH` aligned across nginx, forwarder,
+   main `INGRESS_*`, and `REVERSE_SSH_*`.
+
+Generated clients fail with `Unable to connect WS: bad status`:
+
+1. Confirm `REVERSE_SSH_WS_PATH` / `REVERSE_SSH_PUSH_PATH` reach the
+   `reverse_ssh` container as `RSSH_WS_PATH` / `RSSH_PUSH_PATH`
+   (`docker compose config | grep RSSH_`).
+2. Recreate `reverse_ssh` after `.env` changes.
+3. Confirm nginx `location` paths match the baked client paths.
+
 Webhook not received:
 
 1. Check `webhook -l` inside `reverse_ssh`.

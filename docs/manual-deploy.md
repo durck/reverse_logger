@@ -495,7 +495,9 @@ In the final config, set:
   `reverse_ssh` listener;
 - every decoy redirect to `redirect_target`;
 - `/ws`, `/push`, and `/push/` plus the top `map` rules if custom public paths
-  are used.
+  are used;
+- `/dl/` so public `/dl/<filename>` is proxied to backend `/<filename>` for
+  `link --name <filename>`
 
 Verify the VPS edge:
 
@@ -511,7 +513,11 @@ From any external host, verify TLS and the decoy redirect:
 ```sh
 openssl s_client -connect <rssh_domain>:443 -servername <rssh_domain> </dev/null
 curl -I https://<rssh_domain>/not-a-transport-path
+curl -I https://<rssh_domain>/dl/not-a-real-link
 ```
+
+The first command should redirect to `redirect_target`. The second should reach
+`reverse_ssh` and return a fake nginx 404 for an unknown download name.
 
 This manual flow requires an existing A record pointing `rssh_domain` at the
 VPS, open `80/tcp` and `443/tcp`, SoftEther/internal reachability to the main
@@ -527,10 +533,12 @@ Keep these values identical across the stack:
 - central logger `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`;
 - main `reverse_ssh` listener `REVERSE_SSH_WS_PATH` /
   `REVERSE_SSH_PUSH_PATH`;
-- generated clients from `link --ws-path` / `link --push-path`.
+- generated clients from `link --ws-path` / `link --push-path`;
+- download URLs from `link --name <filename>`, served publicly as
+  `/dl/<filename>` when nginx uses the default download prefix.
 
 Use absolute base paths without a trailing slash, for example `/ws`,
-`/rssh-ws`, `/push`, or `/rssh-push`.
+`/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.
 
 When nginx is in front of `reverse_ssh`, set
 `REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32` or a narrower CIDR that
@@ -700,13 +708,13 @@ when generating clients.
 Default WSS entrypoint:
 
 ```text
-link --wss --ws-path /ws --push-path /push --name linux-wss
+link --wss --ws-path /ws --push-path /push --name main
 ```
 
 Default HTTPS polling entrypoint:
 
 ```text
-link --https --ws-path /ws --push-path /push --name linux-https
+link --https --ws-path /ws --push-path /push --name main
 ```
 
 For custom public paths, first set matching values in `.env` before starting
@@ -728,12 +736,13 @@ docker compose up -d --force-recreate reverse_ssh rssh-logger
 Use the same values in `link`:
 
 ```text
-link --wss --ws-path /rssh-ws --push-path /rssh-push --name linux-wss
-link --https --ws-path /rssh-ws --push-path /rssh-push --name linux-https
+link --wss --ws-path /rssh-ws --push-path /rssh-push --name main
+link --https --ws-path /rssh-ws --push-path /rssh-push --name main
 ```
 
 The command prints a download URL. Copy that URL to the target machine,
-download the generated client, and run it there. In `link -l`, the `Url`
+download the generated client, and run it there. With the nginx edge, the URL
+should be `https://<rssh_domain>/dl/<name>` on the nginx edge. In `link -l`, the `Url`
 column is the binary download URL, while `Client Callback` is the callback
 transport baked into the binary. With the TLS listener used by this stack, the
 download URL should be `https://...`; WSS clients still show `wss://...` in

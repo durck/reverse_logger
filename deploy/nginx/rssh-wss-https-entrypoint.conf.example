@@ -1,6 +1,9 @@
 # Copy to /etc/nginx/sites-available/rssh-entrypoint.conf and adapt values.
 # This template keeps reverse_ssh auth end-to-end: nginx terminates public TLS,
 # but SSH host-key and client-key authentication remain inside WSS/HTTPS payloads.
+#
+# Public downloads use /dl/<filename>, but reverse_ssh link --name <filename>
+# serves /{filename} on the backend. The trailing slash on proxy_pass strips /dl/.
 
 map "$request_method:$uri:$http_upgrade:$arg_key" $rssh_transport {
     default "";
@@ -82,9 +85,9 @@ server {
         proxy_set_header X-Original-Remote-Port $remote_port;
         proxy_set_header X-Original-Host $host;
         proxy_set_header X-Original-Method $request_method;
-        proxy_set_header X-Original-URI $request_uri;
-        proxy_set_header X-Original-Path $uri;
-        proxy_set_header X-Original-Args $args;
+        proxy_set_header X-Original-URI $rssh_mirror_request_uri;
+        proxy_set_header X-Original-Path $rssh_mirror_path;
+        proxy_set_header X-Original-Args $rssh_mirror_args;
         proxy_set_header X-Original-Upgrade $http_upgrade;
         proxy_set_header X-Original-Connection $http_connection;
         proxy_set_header X-Original-User-Agent $http_user_agent;
@@ -94,6 +97,10 @@ server {
     # WSS transport. With patched reverse_ssh, replace /ws with the configured
     # --ws-path and update the map above to the same public path.
     location = /ws {
+        set $rssh_mirror_path $uri;
+        set $rssh_mirror_args $args;
+        set $rssh_mirror_request_uri $request_uri;
+
         if ($http_upgrade !~* "websocket") {
             return 404;
         }
@@ -116,6 +123,10 @@ server {
     # HTTPS polling session init/write path. Only HEAD /push is logged as an
     # ingress event; POST /push is proxied but intentionally not edge-logged.
     location = /push {
+        set $rssh_mirror_path $uri;
+        set $rssh_mirror_args $args;
+        set $rssh_mirror_request_uri $request_uri;
+
         mirror /_rssh_ingress_capture;
         proxy_pass https://192.0.2.10:3232;
         proxy_ssl_verify off;
@@ -141,6 +152,21 @@ server {
         proxy_buffering off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+    }
+
+    # Public GET /dl/<filename> -> backend GET /<filename> (link --name <filename>).
+    # reverse_ssh serves downloads as plain HTTP on the multiplexed listener even when
+    # --tls is enabled. Use http:// to the internal backend; keep transport paths on https://.
+    location ^~ /dl/ {
+        proxy_pass http://192.0.2.10:3232/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 15s;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_request_buffering off;
     }
 
     location / {

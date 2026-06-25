@@ -28,6 +28,7 @@
     redirect_target: https://example.com
     rssh_ws_path: /ws
     rssh_push_path: /push
+    rssh_download_path_prefix: /dl
 
   pre_tasks:
     - name: Validate required variables
@@ -51,6 +52,9 @@
           - rssh_push_path != '/'
           - rssh_ws_path[-1] != '/'
           - rssh_push_path[-1] != '/'
+          - rssh_download_path_prefix is match('^/.+')
+          - rssh_download_path_prefix != '/'
+          - rssh_download_path_prefix[-1] != '/'
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: Fill deploy/ansible/group_vars/vps_edge.yml before running this playbook.
 

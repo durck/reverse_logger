@@ -1,5 +1,7 @@
 # Managed by Ansible. Keep paths aligned with reverse_ssh server/client flags,
-# nginx-edge-forwarder RSSH_* values, and central logger INGRESS_* values.
+# nginx-edge-forwarder RSSH_* values, central logger INGRESS_* values, and
+# Public {{ rssh_download_path_prefix }}/<filename> -> backend /<filename>
+# (link --name <filename>). proxy_pass trailing slash strips the prefix.
 
 map "$request_method:$uri:$http_upgrade:$arg_key" $rssh_transport {
     default "";
@@ -76,9 +78,9 @@ server {
         proxy_set_header X-Original-Remote-Port $remote_port;
         proxy_set_header X-Original-Host $host;
         proxy_set_header X-Original-Method $request_method;
-        proxy_set_header X-Original-URI $request_uri;
-        proxy_set_header X-Original-Path $uri;
-        proxy_set_header X-Original-Args $args;
+        proxy_set_header X-Original-URI $rssh_mirror_request_uri;
+        proxy_set_header X-Original-Path $rssh_mirror_path;
+        proxy_set_header X-Original-Args $rssh_mirror_args;
         proxy_set_header X-Original-Upgrade $http_upgrade;
         proxy_set_header X-Original-Connection $http_connection;
         proxy_set_header X-Original-User-Agent $http_user_agent;
@@ -86,6 +88,10 @@ server {
     }
 
     location = {{ rssh_ws_path }} {
+        set $rssh_mirror_path $uri;
+        set $rssh_mirror_args $args;
+        set $rssh_mirror_request_uri $request_uri;
+
         if ($http_upgrade !~* "websocket") {
             return 404;
         }
@@ -106,6 +112,10 @@ server {
     }
 
     location = {{ rssh_push_path }} {
+        set $rssh_mirror_path $uri;
+        set $rssh_mirror_args $args;
+        set $rssh_mirror_request_uri $request_uri;
+
         mirror /_rssh_ingress_capture;
         proxy_pass {{ backend_reverse_ssh_url }};
         proxy_ssl_verify off;
@@ -130,6 +140,18 @@ server {
         proxy_buffering off;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+    }
+
+    location ^~ {{ rssh_download_path_prefix }}/ {
+        proxy_pass {{ backend_reverse_ssh_url | regex_replace('^https://', 'http://') }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_connect_timeout 15s;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_request_buffering off;
     }
 
     location / {

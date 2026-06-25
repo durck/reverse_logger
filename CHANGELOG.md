@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fix nginx mirror capture to preserve original transport paths for edge forwarder spooling.
+- Add public `/dl/` nginx download proxy (plain HTTP to backend) with prefix stripping.
+- Document ingress correlation, mirror troubleshooting, and `VPS_INTERNAL_IP` matching.
 - Add Docker listener environment variables for custom `reverse_ssh` WSS and HTTPS polling paths.
 - Document the operator connection, client generation, and OpenSSH jump workflow for `reverse_ssh`.
 - Add Let's Encrypt HTTP-01 automation for Ansible-managed nginx edge VPS hosts.

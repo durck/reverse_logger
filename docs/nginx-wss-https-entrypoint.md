@@ -24,6 +24,67 @@ emitted when the long-lived connection closes.
 Do not enable forwarder tail mode while mirror capture is active. Tail mode is
 only a fallback for deployments that cannot use nginx `mirror`.
 
+### Mirror capture and original request paths
+
+Nginx mirror creates an internal subrequest to `/_rssh_ingress_capture`. Inside
+that subrequest, `$uri` is the mirror location (`/_rssh_ingress_capture`), not
+the original transport path (`/ws`, `/track383211`, and so on). The repository
+templates therefore save the original path in parent locations before calling
+`mirror`:
+
+```nginx
+set $rssh_mirror_path $uri;
+set $rssh_mirror_args $args;
+set $rssh_mirror_request_uri $request_uri;
+mirror /_rssh_ingress_capture;
+```
+
+The capture location forwards `$rssh_mirror_path` to the edge forwarder as
+`X-Original-Path`. Without this, the forwarder accepts mirror traffic with HTTP
+202 but does not spool ingress events, and central `ingress_events.jsonl` stays
+empty.
+
+Manual `curl` tests against `http://127.0.0.1:18080/capture` must set
+`X-Original-Path` to the real transport path; a successful 202 alone is not
+enough.
+
+## Client Downloads
+
+`reverse_ssh` serves generated client binaries on the same HTTPS listener as
+WSS and HTTPS polling transports. The `link` command stores the download path in
+`--name`; for example `--name main` is served on the backend at `GET /main`.
+
+The nginx decoy `location /` redirect must not catch those download URLs. The
+repository templates therefore proxy a dedicated public prefix, default `/dl/`,
+to the internal `reverse_ssh` listener over **plain HTTP**, strip that prefix
+before forwarding, and keep WSS/HTTPS polling paths proxied over **HTTPS**.
+
+`reverse_ssh` runs with `--tls`, but its download channel on `:3232` is still
+accepted as plain `GET /{name}` on the internal SoftEther path. Public clients
+use `https://<rssh_domain>/dl/<name>`; nginx terminates TLS and forwards
+`http://<main_internal_ip>:3232/<name>` to the backend. Do not proxy `/dl/` to
+`https://<main>:3232/` unless you also terminate TLS correctly for the internal
+SNI/certificate.
+
+Generate clients without the public prefix in `--name`:
+
+```text
+link --wss --ws-path /ws --push-path /push --name main
+```
+
+Download from the target host:
+
+```sh
+curl -LO https://<rssh_domain>/dl/main
+```
+
+Script wrappers such as `https://<rssh_domain>/dl/main.sh` use the same
+mapping. Unknown paths under `/dl/` still reach `reverse_ssh`, which returns a
+fake nginx 404 page for missing link names.
+
+Keep `link --name <filename>` aligned with the path after `/dl/`. Transport
+paths (`/ws`, `/push`, or custom values) are independent from download paths.
+
 ## Main Server
 
 Expose central `rssh-logger` on the internal address for ingress forwarding:
@@ -74,20 +135,20 @@ listener.
 For WSS:
 
 ```text
-link --wss --ws-path /ws --push-path /push --name linux-wss
+link --wss --ws-path /ws --push-path /push --name main
 ```
 
 For HTTPS polling:
 
 ```text
-link --https --ws-path /ws --push-path /push --name linux-https
+link --https --ws-path /ws --push-path /push --name main
 ```
 
 If the public paths are customized, pass the same values to `link`:
 
 ```text
-link --wss --ws-path /rssh-ws --push-path /rssh-push --name linux-wss
-link --https --ws-path /rssh-ws --push-path /rssh-push --name linux-https
+link --wss --ws-path /rssh-ws --push-path /rssh-push --name main
+link --https --ws-path /rssh-ws --push-path /rssh-push --name main
 ```
 
 ### 3. Download and run the generated client on the target machine
@@ -95,9 +156,10 @@ link --https --ws-path /rssh-ws --push-path /rssh-push --name linux-https
 The generated client connects back to the public nginx domain through WSS or
 HTTPS polling.
 
-In `link -l`, `Url` is only the binary download URL. `Client Callback` is the
-actual reverse_ssh client transport and should show `wss://...` for WSS
-clients or `https://...` for HTTPS polling clients.
+In `link -l`, `Url` is only the binary download URL. It should be served under
+the nginx download prefix, normally `https://<rssh_domain>/dl/<name>`. The
+`Client Callback` value is the actual reverse_ssh client transport and should
+show `wss://...` for WSS clients or `https://...` for HTTPS polling clients.
 
 ### 4. Confirm the client and connect to it from the catcher console
 
@@ -164,6 +226,8 @@ Edit:
 - redirect target
 - port `80/tcp` webroot path if using HTTP-01 manually
 - `/ws` and `/push` paths if using a patched `reverse_ssh` with custom paths
+- `/dl/` download prefix proxied to backend `/` with `proxy_pass .../` so
+  `link --name <filename>` maps to public `/dl/<filename>`
 
 For first manual Let's Encrypt issuance, use the temporary HTTP-only bootstrap
 template before enabling the final `443 ssl` config:
@@ -213,13 +277,17 @@ sudo install -m 0755 /tmp/nginx-edge-forwarder /usr/local/bin/nginx-edge-forward
 Install systemd files:
 
 ```sh
-sudo mkdir -p /etc/reverse-logger
+sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool
 sudo cp deploy/systemd/nginx-edge-forwarder.env.example /etc/reverse-logger/nginx-edge-forwarder.env
 sudo cp deploy/systemd/nginx-edge-forwarder.service /etc/systemd/system/nginx-edge-forwarder.service
 sudo nano /etc/reverse-logger/nginx-edge-forwarder.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now nginx-edge-forwarder
 ```
+
+Set `VPS_INTERNAL_IP` to the address the **main server** sees for this VPS on the
+SoftEther path (for example `10.21.125.98`), not the VPS LAN address. The
+central logger matches ingress events to webhooks using that value.
 
 Check:
 

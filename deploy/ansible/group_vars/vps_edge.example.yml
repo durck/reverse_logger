@@ -11,10 +11,14 @@ edge_forward_token: replace_with_EDGE_FORWARD_TOKEN
 
 vps_name: vps-1
 vps_public_ip: 198.51.100.10
+# SoftEther/VPN address as seen by the main server, not the VPS LAN address.
 vps_internal_ip: 192.0.2.2
 
 rssh_ws_path: /ws
 rssh_push_path: /push
+# Public nginx prefix for downloads. link --name <filename>; clients fetch
+# https://<rssh_domain>/dl/<filename> and nginx proxies to /<filename>.
+rssh_download_path_prefix: /dl
 
 nginx_edge_acme_enabled: true
 nginx_edge_acme_email: admin@example.com

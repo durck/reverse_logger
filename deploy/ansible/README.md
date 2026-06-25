@@ -44,10 +44,13 @@ Set at minimum:
 - `nginx_edge_acme_email`, used for Let's Encrypt registration and expiry notices;
 - `nginx_edge_acme_staging`, set to `true` for the first test run;
 - `rssh_ws_path` and `rssh_push_path`, kept aligned with nginx, forwarder,
-  central `INGRESS_*`, and `reverse_ssh` server/client flags.
+  central `INGRESS_*`, and `reverse_ssh` server/client flags;
+- `rssh_download_path_prefix`, normally `/dl`. Public downloads are
+  `https://<rssh_domain>/dl/<filename>` while `link --name <filename>` serves
+  backend `/<filename>`.
 
 Custom paths must be absolute base paths without a trailing slash, for example
-`/ws`, `/rssh-ws`, `/push`, or `/rssh-push`.
+`/ws`, `/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.
 
 Before running:
 
@@ -123,7 +126,13 @@ docker compose up -d --force-recreate reverse_ssh rssh-logger
 Use the same custom paths in generated clients:
 
 ```text
-link --ws-path /ws --push-path /push
+link --wss --ws-path /ws --push-path /push --name main
+```
+
+Verify a download path reaches `reverse_ssh` instead of the decoy redirect:
+
+```sh
+curl -I https://<rssh_domain>/dl/main
 ```
 
 ## Rollback
