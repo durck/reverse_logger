@@ -48,7 +48,8 @@ Set at minimum:
   central `INGRESS_*`, and `reverse_ssh` server/client flags;
 - `rssh_download_path_prefix`, normally `/dl`. Public downloads are
   `https://<rssh_domain>/dl/<filename>` while `link --name <filename>` serves
-  backend `/<filename>`.
+  backend `/<filename>`. The rendered `/dl/` location sets `proxy_buffering off`
+  so large chunked binaries stream without truncation.
 
 Custom paths must be absolute base paths without a trailing slash, for example
 `/ws`, `/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.

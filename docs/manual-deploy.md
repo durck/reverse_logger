@@ -505,6 +505,7 @@ In the final config, set:
   are used;
 - `/dl/` so public `/dl/<filename>` is proxied to backend `/<filename>` for
   `link --name <filename>`
+- `proxy_buffering off` on `/dl/` for large chunked client binaries
 
 Verify the VPS edge:
 

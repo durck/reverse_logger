@@ -82,6 +82,12 @@ Script wrappers such as `https://<rssh_domain>/dl/main.sh` use the same
 mapping. Unknown paths under `/dl/` still reach `reverse_ssh`, which returns a
 fake nginx 404 page for missing link names.
 
+The `/dl/` location must set `proxy_buffering off`. `reverse_ssh` serves large
+binaries with `Transfer-Encoding: chunked` and no `Content-Length`; nginx's
+default response buffering can truncate multi-megabyte downloads with
+`transfer closed with outstanding read data remaining` or
+`upstream prematurely closed connection` in the error log.
+
 Keep `link --name <filename>` aligned with the path after `/dl/`. Transport
 paths (`/ws`, `/push`, or custom values) are independent from download paths.
 
@@ -228,6 +234,7 @@ Edit:
 - `/ws` and `/push` paths if using a patched `reverse_ssh` with custom paths
 - `/dl/` download prefix proxied to backend `/` with `proxy_pass .../` so
   `link --name <filename>` maps to public `/dl/<filename>`
+- `proxy_buffering off` on `/dl/` so large chunked binaries stream end-to-end
 
 For first manual Let's Encrypt issuance, use the temporary HTTP-only bootstrap
 template before enabling the final `443 ssl` config:

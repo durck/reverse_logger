@@ -100,6 +100,16 @@ curl -I https://<rssh_domain>/dl/<name>
 A missing link should return a fake nginx 404 from `reverse_ssh`, not a
 `Location:` header to the decoy redirect target.
 
+Large `link` download stops early (`curl: (18)`, partial file size):
+
+1. Confirm `/dl/` sets `proxy_buffering off` and uses plain HTTP upstream:
+   `proxy_pass http://<main>:3232/;`.
+2. Compare direct backend size with the public URL:
+   `curl -o /tmp/main http://<main>:3232/<name>` versus
+   `curl -o /tmp/main2 https://<rssh_domain>/dl/<name>`.
+3. Check `/var/log/nginx/error.log` for
+   `upstream prematurely closed connection while reading upstream`.
+
 `nginx-edge-forwarder` fails with `226/NAMESPACE`:
 
 1. Create the spool state directory:
