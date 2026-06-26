@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Harden ingress/webhook correlation with observed `forwarder_ip`, dual timestamp matching, configurable windows, fallback methods, and diagnostics.
 - Fix nginx mirror capture to preserve original transport paths for edge forwarder spooling.
 - Add public `/dl/` nginx download proxy (plain HTTP to backend) with prefix stripping.
 - Document ingress correlation, mirror troubleshooting, and `VPS_INTERNAL_IP` matching.

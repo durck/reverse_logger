@@ -154,6 +154,9 @@ Set at minimum:
 - `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`: central validation paths for nginx
   ingress events. Keep them aligned with VPS nginx and `nginx-edge-forwarder`
   `RSSH_WS_PATH` / `RSSH_PUSH_PATH`; defaults are `/ws` and `/push`.
+- `CORRELATION_*`: optional time windows and fallback switches for matching
+  ingress events to webhooks. Defaults handle normal request ordering; increase
+  the windows if VPS/main clocks or forwarding delays differ.
 - `TELEGRAM_*` settings and `TELEGRAM_PROXY_URL` if alerts are enabled.
 
 ## 4. Build the reverse_ssh Image Locally
@@ -421,6 +424,10 @@ Set at minimum:
 - `EDGE_FORWARD_TOKEN`: `EDGE_FORWARD_TOKEN` from the main `.env`.
 - `VPS_NAME`, `VPS_PUBLIC_IP`, `VPS_INTERNAL_IP`.
 - `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, matching the main `.env`.
+
+`VPS_INTERNAL_IP` should still be set correctly, but the central logger also
+records the observed source IP of the forwarder request as `forwarder_ip` and
+uses it as a correlation fallback.
 
 Install the systemd unit, but start it only after nginx is configured:
 

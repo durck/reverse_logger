@@ -460,6 +460,160 @@ func TestTrustedProxyWebhookDoesNotMatchDifferentIngressClientIP(t *testing.T) {
 	}
 }
 
+func TestWebhookMatchesWhenVPSInternalIPMissingButForwarderIPObserved(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"wss","vps_name":"vps-1","client_ip":"198.51.100.10","client_port":5555,"uri":"/ws","method":"GET","upgrade":"websocket","nginx_received_at":"2026-06-09T12:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressReq.RemoteAddr = "192.0.2.2:53000"
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"192.0.2.2:4444","HostName":"u.c","Timestamp":"2026-06-09T12:00:05Z"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("expected matched correlation: %s", webhookRec.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "enriched_events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"forwarder_ip":"192.0.2.2"`, `"correlation_method":"vps-or-forwarder-ip"`} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("enriched jsonl missing %s: %s", want, string(content))
+		}
+	}
+}
+
+func TestWebhookMatchesWhenVPSInternalIPWrongButForwarderIPObserved(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"wss","vps_name":"vps-1","vps_internal_ip":"10.0.0.99","client_ip":"198.51.100.10","client_port":5555,"uri":"/ws","method":"GET","upgrade":"websocket","nginx_received_at":"2026-06-09T12:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressReq.RemoteAddr = "192.0.2.2:53000"
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"192.0.2.2:4444","HostName":"u.c","Timestamp":"2026-06-09T12:00:05Z"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("expected matched correlation through observed forwarder IP: %s", webhookRec.Body.String())
+	}
+}
+
+func TestTrustedProxyWebhookFallsBackToClientIPWhenVPSAddressWrong(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"wss","vps_name":"vps-1","vps_internal_ip":"10.0.0.99","client_ip":"198.51.100.10","client_port":5555,"uri":"/ws","method":"GET","upgrade":"websocket","nginx_received_at":"2026-06-09T12:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressReq.RemoteAddr = "10.0.0.99:53000"
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"198.51.100.10:0","HostName":"u.c","Timestamp":"2026-06-09T12:00:05Z","Transport":"wss","ProxySourceIP":"192.0.2.2"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("expected trusted-proxy client-ip fallback match: %s", webhookRec.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "enriched_events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"correlation_method":"trusted-proxy-client-ip-fallback"`) {
+		t.Fatalf("enriched jsonl missing client-ip fallback method: %s", string(content))
+	}
+}
+
+func TestWebhookMatchesAcrossSourceAndNginxClockSkew(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"wss","vps_name":"vps-1","vps_internal_ip":"192.0.2.2","client_ip":"198.51.100.10","client_port":5555,"uri":"/ws","method":"GET","upgrade":"websocket","nginx_received_at":"2001-01-01T00:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressReq.RemoteAddr = "192.0.2.2:53000"
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"192.0.2.2:4444","HostName":"u.c","Timestamp":"1999-01-01T00:00:00Z"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("expected central receive times to bridge source/nginx clock skew: %s", webhookRec.Body.String())
+	}
+}
+
 func TestWebhookMarksAmbiguousWhenMultipleIngressCandidates(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

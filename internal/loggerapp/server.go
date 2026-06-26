@@ -187,13 +187,16 @@ func (s *Server) handleIngressEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	receivedAt := time.Now()
 	var event events.IngressEvent
 	if err := json.Unmarshal(body, &event); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	event.RawJSON = append([]byte(nil), body...)
-	event, err = events.NormalizeIngressEvent(event, time.Now())
+	event.ForwarderIP = remoteIPFromRequest(r.RemoteAddr)
+	event.ForwardedAt = receivedAt.UTC()
+	event, err = events.NormalizeIngressEvent(event, receivedAt)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -228,6 +231,17 @@ func tokenFromPath(path, prefix string) string {
 		return ""
 	}
 	return token
+}
+
+func remoteIPFromRequest(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if ip := net.ParseIP(strings.TrimSpace(remoteAddr)); ip != nil {
+		return ip.String()
+	}
+	return ""
 }
 
 func tokenMatches(got, want string) bool {

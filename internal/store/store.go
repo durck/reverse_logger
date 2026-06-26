@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/durck/reverse_logger/internal/events"
@@ -18,6 +19,44 @@ type Store struct {
 	edgeLogPath     string
 	ingressLogPath  string
 	enrichedLogPath string
+	correlation     CorrelationConfig
+}
+
+type CorrelationConfig struct {
+	WebhookMatchBefore       time.Duration
+	WebhookMatchAfter        time.Duration
+	IngressReconcileBefore   time.Duration
+	IngressReconcileAfter    time.Duration
+	EnableClientIPFallback   bool
+	EnableUniqueTimeFallback bool
+}
+
+func DefaultCorrelationConfig() CorrelationConfig {
+	return CorrelationConfig{
+		WebhookMatchBefore:       60 * time.Second,
+		WebhookMatchAfter:        10 * time.Second,
+		IngressReconcileBefore:   10 * time.Second,
+		IngressReconcileAfter:    60 * time.Second,
+		EnableClientIPFallback:   true,
+		EnableUniqueTimeFallback: true,
+	}
+}
+
+func (c CorrelationConfig) normalized() CorrelationConfig {
+	defaults := DefaultCorrelationConfig()
+	if c.WebhookMatchBefore <= 0 {
+		c.WebhookMatchBefore = defaults.WebhookMatchBefore
+	}
+	if c.WebhookMatchAfter <= 0 {
+		c.WebhookMatchAfter = defaults.WebhookMatchAfter
+	}
+	if c.IngressReconcileBefore <= 0 {
+		c.IngressReconcileBefore = defaults.IngressReconcileBefore
+	}
+	if c.IngressReconcileAfter <= 0 {
+		c.IngressReconcileAfter = defaults.IngressReconcileAfter
+	}
+	return c
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -32,6 +71,8 @@ func Open(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	store := &Store{
 		db:              db,
@@ -39,6 +80,7 @@ func Open(dataDir string) (*Store, error) {
 		edgeLogPath:     filepath.Join(dataDir, "edge_events.jsonl"),
 		ingressLogPath:  filepath.Join(dataDir, "ingress_events.jsonl"),
 		enrichedLogPath: filepath.Join(dataDir, "enriched_events.jsonl"),
+		correlation:     DefaultCorrelationConfig(),
 	}
 
 	if err := store.init(); err != nil {
@@ -47,6 +89,10 @@ func Open(dataDir string) (*Store, error) {
 	}
 
 	return store, nil
+}
+
+func (s *Store) SetCorrelationConfig(config CorrelationConfig) {
+	s.correlation = config.normalized()
 }
 
 func (s *Store) init() error {
@@ -102,6 +148,7 @@ CREATE TABLE IF NOT EXISTS ingress_events (
 	vps_name TEXT NOT NULL,
 	vps_public_ip TEXT,
 	vps_internal_ip TEXT,
+	forwarder_ip TEXT,
 	client_ip TEXT NOT NULL,
 	client_port INTEGER,
 	host TEXT,
@@ -124,6 +171,7 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 	source_event_hash TEXT NOT NULL UNIQUE,
 	ingress_event_hash TEXT,
 	correlation_status TEXT NOT NULL,
+	correlation_method TEXT,
 	status TEXT NOT NULL,
 	reverse_ssh_id TEXT,
 	host_name TEXT,
@@ -140,6 +188,7 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 	vps_name TEXT,
 	vps_public_ip TEXT,
 	vps_internal_ip TEXT,
+	forwarder_ip TEXT,
 	version TEXT,
 	source_ts TEXT,
 	received_at TEXT NOT NULL,
@@ -158,10 +207,32 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 		{table: "events", name: "transport", def: "TEXT"},
 		{table: "events", name: "public_key_fingerprint", def: "TEXT"},
 		{table: "events", name: "proxy_source_ip", def: "TEXT"},
+		{table: "ingress_events", name: "forwarder_ip", def: "TEXT"},
+		{table: "enriched_events", name: "correlation_method", def: "TEXT"},
 		{table: "enriched_events", name: "public_key_fingerprint", def: "TEXT"},
 		{table: "enriched_events", name: "proxy_source_ip", def: "TEXT"},
+		{table: "enriched_events", name: "forwarder_ip", def: "TEXT"},
 	} {
 		if err := s.ensureColumn(column.table, column.name, column.def); err != nil {
+			return err
+		}
+	}
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at)",
+		"CREATE INDEX IF NOT EXISTS idx_events_source_ts ON events(source_ts)",
+		"CREATE INDEX IF NOT EXISTS idx_events_ip_addr ON events(ip_addr)",
+		"CREATE INDEX IF NOT EXISTS idx_events_proxy_source_ip ON events(proxy_source_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_nginx_received_at ON ingress_events(nginx_received_at)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_forwarded_at ON ingress_events(forwarded_at)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_vps_internal_ip ON ingress_events(vps_internal_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_vps_public_ip ON ingress_events(vps_public_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_forwarder_ip ON ingress_events(forwarder_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_ingress_client_ip ON ingress_events(client_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_enriched_ingress_status ON enriched_events(ingress_event_hash, status)",
+		"CREATE INDEX IF NOT EXISTS idx_enriched_reverse_status ON enriched_events(reverse_ssh_id, status, correlation_status)",
+	}
+	for _, stmt := range indexes {
+		if _, err := s.db.Exec(stmt); err != nil {
 			return err
 		}
 	}
@@ -277,17 +348,18 @@ func (s *Store) InsertIngressEvent(event events.IngressEvent) (bool, error) {
 
 	res, err := tx.Exec(`
 INSERT OR IGNORE INTO ingress_events (
-	event_hash, request_id, transport, vps_name, vps_public_ip, vps_internal_ip,
+	event_hash, request_id, transport, vps_name, vps_public_ip, vps_internal_ip, forwarder_ip,
 	client_ip, client_port, host, uri, method, user_agent, upgrade_header,
 	connection_header, x_forwarded_for, polling_key_sha1, nginx_received_at,
 	forwarded_at, raw_headers, raw_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventHash,
 		event.RequestID,
 		event.Transport,
 		event.VPSName,
 		event.VPSPublicIP,
 		event.VPSInternalIP,
+		event.ForwarderIP,
 		event.ClientIP,
 		event.ClientPort,
 		event.Host,
@@ -326,11 +398,11 @@ INSERT OR IGNORE INTO ingress_events (
 }
 
 func (s *Store) EnrichAndStoreEvent(event events.Event) (events.EnrichedEvent, bool, error) {
-	ingress, status, err := s.findIngressForEvent(event)
+	ingress, status, method, err := s.findIngressForEvent(event)
 	if err != nil {
 		return events.EnrichedEvent{}, false, err
 	}
-	enriched := events.NewEnrichedEvent(event, ingress, status)
+	enriched := events.NewEnrichedEventWithMethod(event, ingress, status, method)
 	inserted, err := s.InsertEnrichedEvent(enriched)
 	return enriched, inserted, err
 }
@@ -354,15 +426,16 @@ func (s *Store) InsertEnrichedEvent(event events.EnrichedEvent) (bool, error) {
 	res, err := tx.Exec(`
 INSERT INTO enriched_events (
 	event_hash, source_event_hash, ingress_event_hash, correlation_status,
-	status, reverse_ssh_id, host_name, user_name, computer_name, ip_raw, ip_addr,
+	correlation_method, status, reverse_ssh_id, host_name, user_name, computer_name, ip_raw, ip_addr,
 	ip_port, real_client_ip, client_port, transport, public_key_fingerprint,
-	proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip, version,
+	proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip, forwarder_ip, version,
 	source_ts, received_at, ingress_received_at, raw_webhook_json, raw_ingress_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_event_hash) DO UPDATE SET
 	event_hash = excluded.event_hash,
 	ingress_event_hash = excluded.ingress_event_hash,
 	correlation_status = excluded.correlation_status,
+	correlation_method = excluded.correlation_method,
 	real_client_ip = excluded.real_client_ip,
 	client_port = excluded.client_port,
 	transport = excluded.transport,
@@ -371,6 +444,7 @@ ON CONFLICT(source_event_hash) DO UPDATE SET
 	vps_name = excluded.vps_name,
 	vps_public_ip = excluded.vps_public_ip,
 	vps_internal_ip = excluded.vps_internal_ip,
+	forwarder_ip = excluded.forwarder_ip,
 	ingress_received_at = excluded.ingress_received_at,
 	raw_ingress_json = excluded.raw_ingress_json
 WHERE enriched_events.event_hash <> excluded.event_hash
@@ -385,6 +459,7 @@ WHERE enriched_events.event_hash <> excluded.event_hash
 		event.SourceEventHash,
 		event.IngressEventHash,
 		event.CorrelationStatus,
+		event.CorrelationMethod,
 		event.Status,
 		event.ReverseSSHID,
 		event.HostName,
@@ -401,6 +476,7 @@ WHERE enriched_events.event_hash <> excluded.event_hash
 		event.VPSName,
 		event.VPSPublicIP,
 		event.VPSInternalIP,
+		event.ForwarderIP,
 		event.Version,
 		sourceTS,
 		event.ReceivedAt.UTC().Format(time.RFC3339Nano),
@@ -431,27 +507,58 @@ WHERE enriched_events.event_hash <> excluded.event_hash
 }
 
 func (s *Store) ReconcileIngressEvent(ingress events.IngressEvent) (int, error) {
-	after := ingress.NginxReceivedAt.Add(-10 * time.Second).UTC().Format(time.RFC3339Nano)
-	before := ingress.NginxReceivedAt.Add(60 * time.Second).UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.Query(`
+	windows := s.ingressReconcileWindows(ingress)
+	count, err := s.reconcileIngressEvent(ingress, windows, true)
+	if err != nil || count > 0 {
+		return count, err
+	}
+	if !s.correlation.EnableClientIPFallback && !s.correlation.EnableUniqueTimeFallback {
+		return count, nil
+	}
+	return s.reconcileIngressEvent(ingress, windows, false)
+}
+
+func (s *Store) reconcileIngressEvent(ingress events.IngressEvent, windows []timeWindow, requireIPMatch bool) (int, error) {
+	args := make([]any, 0, len(windows)*4+8)
+	timePredicate := buildEventTimePredicate(windows, &args)
+	query := `
 SELECT event_hash, status, reverse_ssh_id, host_name, user_name, computer_name,
 	ip_raw, ip_addr, ip_port, transport, public_key_fingerprint, proxy_source_ip,
 	version, source_ts, received_at, raw_json
 FROM events
-WHERE (received_at BETWEEN ? AND ? OR source_ts BETWEEN ? AND ?)
-  AND (ip_addr = ? OR ip_addr = ? OR proxy_source_ip = ? OR proxy_source_ip = ?)
-ORDER BY received_at DESC`, after, before, after, before, ingress.VPSInternalIP, ingress.VPSPublicIP, ingress.VPSInternalIP, ingress.VPSPublicIP)
+WHERE ` + timePredicate + `
+`
+	if requireIPMatch {
+		predicate, predicateArgs := eventIPPredicateForIngress(ingress)
+		if predicate == "" {
+			return 0, nil
+		}
+		query += "  AND (" + predicate + ")\n"
+		args = append(args, predicateArgs...)
+	}
+	query += "ORDER BY received_at DESC"
+	rows, err := s.db.Query(strings.TrimSpace(query), args...)
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
 
-	count := 0
+	var candidates []events.Event
 	for rows.Next() {
 		event, err := scanEvent(rows)
 		if err != nil {
-			return count, err
+			return 0, err
 		}
+		candidates = append(candidates, event)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, event := range candidates {
 		_, changed, err := s.EnrichAndStoreEvent(event)
 		if err != nil {
 			return count, err
@@ -460,57 +567,178 @@ ORDER BY received_at DESC`, after, before, after, before, ingress.VPSInternalIP,
 			count++
 		}
 	}
-	return count, rows.Err()
+	return count, nil
 }
 
-func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, string, error) {
+func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, string, string, error) {
 	if event.Status == "disconnected" {
 		ingress, ok, err := s.findConnectedIngressForClient(event.ReverseSSHID)
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		if ok {
-			return ingress, "matched", nil
+			return ingress, "matched", "connected-history", nil
 		}
-		return nil, "unmatched", nil
+		return nil, "unmatched", "none", nil
 	}
+	windows := s.eventMatchWindows(event)
 	matchIP := event.IPAddr
+	primaryMethod := "vps-or-forwarder-ip"
 	if event.ProxySourceIP != "" {
 		matchIP = event.ProxySourceIP
+		primaryMethod = "trusted-proxy"
 	}
-	if matchIP == "" {
-		return nil, "unmatched", nil
+	if matchIP != "" {
+		condition := "(vps_internal_ip = ? OR vps_public_ip = ? OR forwarder_ip = ?)"
+		args := []any{matchIP, matchIP, matchIP}
+		if event.ProxySourceIP != "" && event.IPAddr != "" {
+			condition += " AND client_ip = ?"
+			args = append(args, event.IPAddr)
+		}
+		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		if err != nil {
+			return nil, "", "", err
+		}
+		if len(candidates) > 0 {
+			return resolveIngressCandidates(candidates, primaryMethod)
+		}
 	}
-	baseTime := event.ReceivedAt
+
+	if s.correlation.EnableClientIPFallback && event.ProxySourceIP != "" && event.IPAddr != "" {
+		condition := "client_ip = ?"
+		args := []any{event.IPAddr}
+		if event.Transport != "" {
+			condition += " AND transport = ?"
+			args = append(args, event.Transport)
+		}
+		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		if err != nil {
+			return nil, "", "", err
+		}
+		if len(candidates) > 0 {
+			return resolveIngressCandidates(candidates, "trusted-proxy-client-ip-fallback")
+		}
+	}
+
+	if s.correlation.EnableUniqueTimeFallback && !(event.ProxySourceIP != "" && event.IPAddr != "") {
+		condition := ""
+		var args []any
+		if event.Transport != "" {
+			condition = "transport = ?"
+			args = append(args, event.Transport)
+		}
+		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		if err != nil {
+			return nil, "", "", err
+		}
+		if len(candidates) > 0 {
+			return resolveIngressCandidates(candidates, "unique-time-fallback")
+		}
+	}
+
+	return nil, "unmatched", "none", nil
+}
+
+type timeWindow struct {
+	after  string
+	before string
+}
+
+func (s *Store) eventMatchWindows(event events.Event) []timeWindow {
+	times := []time.Time{event.ReceivedAt}
 	if !event.SourceTS.IsZero() {
-		baseTime = event.SourceTS
+		times = append(times, event.SourceTS)
 	}
-	after := baseTime.Add(-60 * time.Second).UTC().Format(time.RFC3339Nano)
-	before := baseTime.Add(10 * time.Second).UTC().Format(time.RFC3339Nano)
+	return buildTimeWindows(times, s.correlation.WebhookMatchBefore, s.correlation.WebhookMatchAfter)
+}
+
+func (s *Store) ingressReconcileWindows(ingress events.IngressEvent) []timeWindow {
+	times := []time.Time{ingress.NginxReceivedAt}
+	if !ingress.ForwardedAt.IsZero() {
+		times = append(times, ingress.ForwardedAt)
+	}
+	return buildTimeWindows(times, s.correlation.IngressReconcileBefore, s.correlation.IngressReconcileAfter)
+}
+
+func buildTimeWindows(times []time.Time, before, after time.Duration) []timeWindow {
+	if before <= 0 {
+		before = time.Second
+	}
+	if after <= 0 {
+		after = time.Second
+	}
+	seen := map[string]bool{}
+	windows := make([]timeWindow, 0, len(times))
+	for _, value := range times {
+		if value.IsZero() {
+			continue
+		}
+		value = value.UTC()
+		key := value.Format(time.RFC3339Nano)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		windows = append(windows, timeWindow{
+			after:  value.Add(-before).Format(time.RFC3339Nano),
+			before: value.Add(after).Format(time.RFC3339Nano),
+		})
+	}
+	if len(windows) == 0 {
+		now := time.Now().UTC()
+		windows = append(windows, timeWindow{
+			after:  now.Add(-before).Format(time.RFC3339Nano),
+			before: now.Add(after).Format(time.RFC3339Nano),
+		})
+	}
+	return windows
+}
+
+func buildIngressTimePredicate(windows []timeWindow, args *[]any) string {
+	clauses := make([]string, 0, len(windows))
+	for _, window := range windows {
+		clauses = append(clauses, "(nginx_received_at BETWEEN ? AND ? OR forwarded_at BETWEEN ? AND ?)")
+		*args = append(*args, window.after, window.before, window.after, window.before)
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func buildEventTimePredicate(windows []timeWindow, args *[]any) string {
+	clauses := make([]string, 0, len(windows))
+	for _, window := range windows {
+		clauses = append(clauses, "(received_at BETWEEN ? AND ? OR source_ts BETWEEN ? AND ?)")
+		*args = append(*args, window.after, window.before, window.after, window.before)
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func (s *Store) findIngressCandidates(windows []timeWindow, condition string, conditionArgs []any, limit int) ([]events.IngressEvent, error) {
+	args := make([]any, 0, len(windows)*4+len(conditionArgs)+1)
 	query := `
 SELECT event_hash, request_id, transport, vps_name, vps_public_ip, vps_internal_ip,
-	client_ip, client_port, host, uri, method, user_agent, upgrade_header,
+	forwarder_ip, client_ip, client_port, host, uri, method, user_agent, upgrade_header,
 	connection_header, x_forwarded_for, polling_key_sha1, nginx_received_at,
 	forwarded_at, raw_headers, raw_json
 FROM ingress_events
-WHERE nginx_received_at BETWEEN ? AND ?
-  AND (vps_internal_ip = ? OR vps_public_ip = ?)
+WHERE ` + buildIngressTimePredicate(windows, &args) + `
 `
-	args := []any{after, before, matchIP, matchIP}
-	if event.ProxySourceIP != "" && event.IPAddr != "" {
-		query += "  AND client_ip = ?\n"
-		args = append(args, event.IPAddr)
+	if strings.TrimSpace(condition) != "" {
+		query += "  AND (" + condition + ")\n"
+		args = append(args, conditionArgs...)
 	}
 	query += `  AND NOT EXISTS (
     SELECT 1 FROM enriched_events
     WHERE enriched_events.ingress_event_hash = ingress_events.event_hash
       AND enriched_events.status = 'connected'
   )
-ORDER BY nginx_received_at DESC
-LIMIT 2`
+ORDER BY coalesce(nullif(forwarded_at, ''), nginx_received_at) DESC, nginx_received_at DESC`
+	if limit > 0 {
+		query += "\nLIMIT ?"
+		args = append(args, limit)
+	}
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -518,21 +746,50 @@ LIMIT 2`
 	for rows.Next() {
 		ingress, err := scanIngressEvent(rows)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		candidates = append(candidates, ingress)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", err
-	}
+	return candidates, rows.Err()
+}
+
+func resolveIngressCandidates(candidates []events.IngressEvent, method string) (*events.IngressEvent, string, string, error) {
 	switch len(candidates) {
 	case 0:
-		return nil, "unmatched", nil
+		return nil, "unmatched", "none", nil
 	case 1:
-		return &candidates[0], "matched", nil
+		return &candidates[0], "matched", method, nil
 	default:
-		return nil, "ambiguous", nil
+		return nil, "ambiguous", method, nil
 	}
+}
+
+func eventIPPredicateForIngress(ingress events.IngressEvent) (string, []any) {
+	ips := uniqueNonEmpty(ingress.VPSInternalIP, ingress.VPSPublicIP, ingress.ForwarderIP, ingress.ClientIP)
+	if len(ips) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(ips))
+	args := make([]any, 0, len(ips)*2)
+	for _, ip := range ips {
+		clauses = append(clauses, "(ip_addr = ? OR proxy_source_ip = ?)")
+		args = append(args, ip, ip)
+	}
+	return strings.Join(clauses, " OR "), args
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func (s *Store) findConnectedIngressForClient(reverseSSHID string) (*events.IngressEvent, bool, error) {
@@ -541,7 +798,7 @@ func (s *Store) findConnectedIngressForClient(reverseSSHID string) (*events.Ingr
 	}
 	row := s.db.QueryRow(`
 SELECT ie.event_hash, ie.request_id, ie.transport, ie.vps_name, ie.vps_public_ip,
-	ie.vps_internal_ip, ie.client_ip, ie.client_port, ie.host, ie.uri, ie.method,
+	ie.vps_internal_ip, ie.forwarder_ip, ie.client_ip, ie.client_port, ie.host, ie.uri, ie.method,
 	ie.user_agent, ie.upgrade_header, ie.connection_header, ie.x_forwarded_for,
 	ie.polling_key_sha1, ie.nginx_received_at, ie.forwarded_at, ie.raw_headers, ie.raw_json
 FROM enriched_events ee
@@ -631,6 +888,7 @@ func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {
 		&event.VPSName,
 		&event.VPSPublicIP,
 		&event.VPSInternalIP,
+		&event.ForwarderIP,
 		&event.ClientIP,
 		&event.ClientPort,
 		&event.Host,

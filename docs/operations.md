@@ -45,8 +45,26 @@ Nginx ingress and enriched central events:
 tail -n 20 /opt/reverse-logger/data/logger/ingress_events.jsonl
 tail -n 20 /opt/reverse-logger/data/logger/enriched_events.jsonl
 sqlite3 /opt/reverse-logger/data/logger/events.db \
-  'select correlation_status, status, reverse_ssh_id, real_client_ip, transport, received_at from enriched_events order by id desc limit 20;'
+  'select correlation_status, correlation_method, status, reverse_ssh_id, real_client_ip, transport, forwarder_ip, received_at from enriched_events order by id desc limit 20;'
 ```
+
+`correlation_method` explains how an ingress event was selected:
+
+- `vps-or-forwarder-ip`: webhook `ip_raw` matched either `vps_internal_ip`,
+  `vps_public_ip`, or the central logger's observed `forwarder_ip`.
+- `trusted-proxy`: webhook `ProxySourceIP` matched a VPS/forwarder address and
+  webhook `IP` matched ingress `client_ip`.
+- `trusted-proxy-client-ip-fallback`: VPS address metadata was missing or
+  wrong, but exactly one ingress candidate matched the trusted-proxy real
+  `client_ip` inside the configured window.
+- `unique-time-fallback`: VPS address metadata was unusable and exactly one
+  unclaimed ingress candidate existed in the configured time window.
+- `connected-history`: a `disconnected` webhook inherited the matched ingress
+  metadata from the previous `connected` event with the same `reverse_ssh_id`.
+
+The logger records `forwarder_ip` from the HTTP source address of the
+`/ingress-events` request. This often recovers correlation when
+`VPS_INTERNAL_IP` is empty or set to the wrong VPS-side address.
 
 ## Backup
 
@@ -135,10 +153,20 @@ Large `link` download stops early (`curl: (18)`, partial file size):
 `enriched_events` stays `unmatched`:
 
 1. Confirm `ingress_events.jsonl` receives events for the same session.
-2. Set forwarder `VPS_INTERNAL_IP` to the address main sees in webhook
-   `ip_raw` (SoftEther/VPN source), not the VPS private LAN IP.
-3. Keep `RSSH_WS_PATH` / `RSSH_PUSH_PATH` aligned across nginx, forwarder,
+2. Check `correlation_method` and `forwarder_ip` in `enriched_events`.
+3. Set forwarder `VPS_INTERNAL_IP` to the address main sees in webhook
+   `ip_raw` (SoftEther/VPN source), not the VPS private LAN IP. If this value
+   is missing or wrong, central `forwarder_ip` is tried automatically.
+4. Keep `RSSH_WS_PATH` / `RSSH_PUSH_PATH` aligned across nginx, forwarder,
    main `INGRESS_*`, and `REVERSE_SSH_*`.
+5. If clocks or forwarding are delayed, increase:
+
+```text
+CORRELATION_WEBHOOK_MATCH_BEFORE=5m
+CORRELATION_WEBHOOK_MATCH_AFTER=1m
+CORRELATION_INGRESS_RECONCILE_BEFORE=1m
+CORRELATION_INGRESS_RECONCILE_AFTER=5m
+```
 
 Generated clients fail with `Unable to connect WS: bad status`:
 

@@ -54,6 +54,7 @@ type IngressEvent struct {
 	VPSName         string          `json:"vps_name"`
 	VPSPublicIP     string          `json:"vps_public_ip,omitempty"`
 	VPSInternalIP   string          `json:"vps_internal_ip,omitempty"`
+	ForwarderIP     string          `json:"forwarder_ip,omitempty"`
 	ClientIP        string          `json:"client_ip"`
 	ClientPort      int             `json:"client_port,omitempty"`
 	Host            string          `json:"host,omitempty"`
@@ -75,6 +76,7 @@ type EnrichedEvent struct {
 	SourceEventHash      string          `json:"source_event_hash"`
 	IngressEventHash     string          `json:"ingress_event_hash,omitempty"`
 	CorrelationStatus    string          `json:"correlation_status"`
+	CorrelationMethod    string          `json:"correlation_method,omitempty"`
 	Status               string          `json:"status"`
 	ReverseSSHID         string          `json:"reverse_ssh_id"`
 	HostName             string          `json:"host_name"`
@@ -91,6 +93,7 @@ type EnrichedEvent struct {
 	VPSName              string          `json:"vps_name,omitempty"`
 	VPSPublicIP          string          `json:"vps_public_ip,omitempty"`
 	VPSInternalIP        string          `json:"vps_internal_ip,omitempty"`
+	ForwarderIP          string          `json:"forwarder_ip,omitempty"`
 	Version              string          `json:"version,omitempty"`
 	SourceTS             time.Time       `json:"source_ts,omitempty"`
 	ReceivedAt           time.Time       `json:"received_at"`
@@ -272,6 +275,7 @@ func NormalizeIngressEvent(event IngressEvent, receivedAt time.Time) (IngressEve
 	event.VPSName = strings.TrimSpace(event.VPSName)
 	event.VPSPublicIP = strings.TrimSpace(event.VPSPublicIP)
 	event.VPSInternalIP = strings.TrimSpace(event.VPSInternalIP)
+	event.ForwarderIP = strings.TrimSpace(event.ForwarderIP)
 	event.ClientIP = strings.TrimSpace(event.ClientIP)
 	event.Host = strings.TrimSpace(event.Host)
 	event.URI = strings.TrimSpace(event.URI)
@@ -307,6 +311,9 @@ func validateIngressEvent(event IngressEvent) error {
 	}
 	if event.ClientIP == "" || net.ParseIP(event.ClientIP) == nil {
 		return errors.New("client_ip must be a valid IP address")
+	}
+	if event.ForwarderIP != "" && net.ParseIP(event.ForwarderIP) == nil {
+		return errors.New("forwarder_ip must be a valid IP address")
 	}
 	if event.ClientPort < 0 || event.ClientPort > 65535 {
 		return errors.New("client_port must be between 0 and 65535")
@@ -445,9 +452,14 @@ func HashIngressEvent(event IngressEvent) string {
 }
 
 func NewEnrichedEvent(event Event, ingress *IngressEvent, status string) EnrichedEvent {
+	return NewEnrichedEventWithMethod(event, ingress, status, "")
+}
+
+func NewEnrichedEventWithMethod(event Event, ingress *IngressEvent, status, method string) EnrichedEvent {
 	enriched := EnrichedEvent{
 		SourceEventHash:      event.EventHash,
 		CorrelationStatus:    strings.TrimSpace(status),
+		CorrelationMethod:    strings.TrimSpace(method),
 		Status:               event.Status,
 		ReverseSSHID:         event.ReverseSSHID,
 		HostName:             event.HostName,
@@ -475,6 +487,7 @@ func NewEnrichedEvent(event Event, ingress *IngressEvent, status string) Enriche
 		enriched.VPSName = ingress.VPSName
 		enriched.VPSPublicIP = ingress.VPSPublicIP
 		enriched.VPSInternalIP = ingress.VPSInternalIP
+		enriched.ForwarderIP = ingress.ForwarderIP
 		enriched.IngressReceivedAt = ingress.NginxReceivedAt.UTC()
 		enriched.RawIngressJSON = append([]byte(nil), ingress.RawJSON...)
 	}
@@ -487,6 +500,7 @@ func HashEnrichedEvent(event EnrichedEvent) string {
 		event.SourceEventHash,
 		event.IngressEventHash,
 		event.CorrelationStatus,
+		event.CorrelationMethod,
 		event.RealClientIP,
 		event.Transport,
 	)
