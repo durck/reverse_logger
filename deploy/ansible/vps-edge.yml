@@ -63,9 +63,11 @@
       ansible.builtin.set_fact:
         main_reachability_ip: >-
           {{
-            main_internal_ip
-            | default(
+            (main_internal_ip | default('', true))
+            if (main_internal_ip | default('', true) | length > 0)
+            else (
                 backend_reverse_ssh_url
+                | default('', true)
                 | regex_replace('^https?://', '')
                 | regex_replace('/.*', '')
                 | regex_replace(':.*', '')
@@ -89,7 +91,7 @@
 
     - name: Derive vps_internal_ip from route toward main
       ansible.builtin.set_fact:
-        vps_internal_ip: "{{ vps_route_to_main.stdout | regex_search('src ([0-9.]+)', '\\1') | first }}"
+        vps_internal_ip: "{{ (vps_route_to_main.stdout | regex_search('src ([0-9.]+)', '\\1') | default([], true) | first) | default('', true) }}"
       when:
         - vps_route_to_main is defined
         - vps_route_to_main.rc == 0
@@ -118,8 +120,7 @@
           - edge_forward_token != 'replace_with_EDGE_FORWARD_TOKEN'
           - vps_name is defined
           - vps_public_ip is defined
-          - vps_internal_ip is defined
-          - vps_internal_ip | length > 0
+          - vps_internal_ip | default('', true) | length == 0 or vps_internal_ip is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
           - rssh_ws_path is match('^/.+')
           - rssh_push_path is match('^/.+')
           - rssh_ws_path != '/'
@@ -132,8 +133,9 @@
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: >-
           Fill deploy/ansible/group_vars/vps_edge.yml and per-host rssh_domain in
-          inventory.ini. Ensure SoftEther/VPN on this VPS can reach main_internal_ip
-          so vps_internal_ip can be detected.
+          inventory.ini. Ensure the VPS can reach the main reverse_ssh and logger
+          endpoints. vps_internal_ip is optional; when absent, central correlation
+          falls back to the observed forwarder_ip.
 
     - name: Validate ACME variables
       ansible.builtin.assert:
@@ -168,6 +170,28 @@
         update_cache: true
         state: present
       when: ansible_os_family == 'Debian'
+
+    - name: Check reverse_ssh backend reachability from VPS
+      ansible.builtin.wait_for:
+        host: "{{ main_reachability_ip }}"
+        port: "{{ main_reverse_ssh_port }}"
+        timeout: 5
+        connect_timeout: 2
+      changed_when: false
+      when:
+        - main_reachability_ip is defined
+        - main_reachability_ip | length > 0
+
+    - name: Check central logger reachability from VPS
+      ansible.builtin.wait_for:
+        host: "{{ main_reachability_ip }}"
+        port: "{{ main_logger_port }}"
+        timeout: 5
+        connect_timeout: 2
+      changed_when: false
+      when:
+        - main_reachability_ip is defined
+        - main_reachability_ip | length > 0
 
     - name: Install snapd for Certbot
       ansible.builtin.apt:
@@ -562,8 +586,8 @@
           - "host={{ inventory_hostname }}"
           - "domain={{ rssh_domain }}"
           - "public_ip={{ vps_public_ip }}"
-          - "vpn_ip={{ vps_internal_ip }}"
-          - "trusted_proxy_cidr={{ vps_internal_ip }}/32"
+          - "vpn_ip={{ vps_internal_ip | default('not detected; central logger will use forwarder_ip fallback', true) }}"
+          - "trusted_proxy_cidr={{ ((vps_internal_ip | default('', true) | length) > 0) | ternary((vps_internal_ip | default('', true)) ~ '/32', 'not available') }}"
 
     - name: Build trusted proxy CIDR list for main server
       ansible.builtin.set_fact:
@@ -572,6 +596,7 @@
             groups['vps_edge']
             | map('extract', hostvars, 'vps_internal_ip')
             | select('defined')
+            | select('match', '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
             | map('regex_replace', '^(.*)$', '\\1/32')
             | list
             | unique
@@ -582,8 +607,14 @@
     - name: Show main server reverse_ssh trusted proxy setting
       ansible.builtin.debug:
         msg: >-
+          {% if trusted_proxy_cidrs | length > 0 %}
           Add to main /opt/reverse-logger/.env:
           REVERSE_SSH_TRUSTED_PROXY_CIDR={{ trusted_proxy_cidrs | join(',') }}
+          {% else %}
+          No vps_internal_ip values were detected. Keep
+          REVERSE_SSH_TRUSTED_PROXY_CIDR unchanged and rely on central
+          forwarder_ip correlation fallback.
+          {% endif %}
       run_once: true
       delegate_to: localhost
 

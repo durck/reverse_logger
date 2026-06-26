@@ -6,10 +6,10 @@ all:
       children:
         edge_group_1:
           hosts:
-            equipads:
-              ansible_host: 188.225.39.88
-              rssh_domain: equipads.ru
-            # equipads-2:
+            edge1:
+              ansible_host: 203.0.113.20
+              rssh_domain: entry1.example.com
+            # edge1-b:
             #   ansible_host: 203.0.113.21
             #   rssh_domain: entry1b.example.com
         edge_group_2:

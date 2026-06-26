@@ -1,9 +1,9 @@
 # Copy shared vars to group_vars/vps_edge.yml (gitignored).
 # Per-group transport paths live in group_vars/edge_group_*.yml.
 
-redirect_target: https://ya.ru
+redirect_target: https://example.com
 
-main_internal_ip: 10.21.125.154
+main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232
 main_logger_port: 8080
 

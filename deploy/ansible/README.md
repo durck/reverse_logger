@@ -25,10 +25,10 @@ or the main `reverse_ssh` server.
 ## Multi-VPS layout
 
 ```text
-equipads.ru  (188.225.39.88) ──VPN──┐
-entry2.example (203.0.113.20) ─VPN──┼──> main 10.21.125.154
-entry3.example (...)         ─VPN──┘     reverse_ssh :3232
-                                         rssh-logger :8080
+entry1.example.com (203.0.113.20) ─VPN──┐
+entry2.example.com (203.0.113.30) ─VPN──┼──> main 192.0.2.10
+entry3.example.com (...)          ─VPN──┘     reverse_ssh :3232
+                                           rssh-logger :8080
 ```
 
 ## Four edge groups with different transport paths
@@ -97,7 +97,7 @@ listeners on main when you do not want nginx path rewriting.
 Each VPS gets:
 
 - its own `rssh_domain` and Let's Encrypt certificate;
-- auto-detected `vps_internal_ip` (VPN source IP toward main);
+- optional auto-detected `vps_internal_ip` (VPN source IP toward main);
 - shared `main_internal_ip`, `edge_forward_token`, transport paths.
 
 ## Prerequisites (before Ansible)
@@ -106,7 +106,9 @@ On **each VPS**:
 
 1. Ubuntu with root SSH access.
 2. SoftEther/VPN client configured and connected to main.
-3. Route to main works: `ip route get <main_internal_ip>` shows a `src` VPN IP.
+3. Route to main works: `ip route get <main_internal_ip>` should show a `src` VPN IP.
+   If it does not, deployment still works, but trusted proxy CIDR output is skipped
+   and central event correlation falls back to observed `forwarder_ip`.
 4. DNS `A` record: `<rssh_domain>` → public IP of this VPS.
 5. Inbound `80/tcp` and `443/tcp` open.
 
@@ -131,6 +133,9 @@ Or use YAML inventory:
 cp deploy/ansible/inventory.example.yml deploy/ansible/inventory.yml
 ```
 
+When using YAML inventory, pass it explicitly with `-i inventory.yml`; local
+`ansible.cfg` defaults to `inventory.ini`.
+
 Both inventory files are gitignored once copied.
 
 ### Inventory: groups and hosts
@@ -145,7 +150,7 @@ edge_group_3
 edge_group_4
 
 [edge_group_1]
-equipads ansible_host=188.225.39.88 rssh_domain=equipads.ru
+edge1 ansible_host=203.0.113.20 rssh_domain=entry1.example.com
 
 [edge_group_2]
 edge2-a ansible_host=203.0.113.30 rssh_domain=entry2a.example.com
@@ -172,9 +177,9 @@ ansible-playbook ... --ask-pass
 `deploy/ansible/group_vars/vps_edge.yml`:
 
 ```yaml
-main_internal_ip: 10.21.125.154
+main_internal_ip: 192.0.2.10
 edge_forward_token: <from main .env>
-redirect_target: https://ya.ru
+redirect_target: https://example.com
 main_ws_path: /ws
 main_push_path: /push
 ```
@@ -190,7 +195,7 @@ Per-host `rssh_domain` stays in inventory.
 | `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events` |
 | `vps_name` | inventory hostname |
 | `vps_public_ip` | `ansible_host` |
-| `vps_internal_ip` | `ip route get <main_internal_ip>` → `src` |
+| `vps_internal_ip` | optional `ip route get <main_internal_ip>` → `src` |
 | `nginx_edge_acme_email` | `admin@<rssh_domain>` |
 
 ## Run
@@ -202,6 +207,12 @@ cd deploy/ansible
 ansible-playbook vps-edge.yml
 ```
 
+With YAML inventory:
+
+```sh
+ansible-playbook -i inventory.yml vps-edge.yml
+```
+
 From repo root:
 
 ```sh
@@ -211,7 +222,7 @@ ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
 Limit to one host:
 
 ```sh
-ansible-playbook vps-edge.yml --limit equipads
+ansible-playbook vps-edge.yml --limit edge1
 ```
 
 Staging certificates first:
@@ -231,29 +242,33 @@ ansible vps_edge -m ping
 The playbook prints a summary per host and a combined line for main:
 
 ```text
-REVERSE_SSH_TRUSTED_PROXY_CIDR=10.21.125.98/32,10.21.125.99/32
+REVERSE_SSH_TRUSTED_PROXY_CIDR=192.0.2.98/32,192.0.2.99/32
 ```
 
-Add that to main `.env`, then recreate listeners:
+Add that to main `.env` when it is printed. If no `vps_internal_ip` was
+detected, keep the existing trusted proxy value and rely on central
+`forwarder_ip` correlation fallback.
+
+Then recreate listeners:
 
 ```sh
 cd /opt/reverse-logger
-docker compose up -d --force-recreate reverse_ssh rssh-logger
+docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d --force-recreate reverse_ssh rssh-logger
 ```
 
 Verify each edge:
 
 ```sh
 ansible vps_edge -m shell -a 'systemctl is-active nginx nginx-edge-forwarder'
-curl -I https://equipads.ru/dl/main
+curl -I https://entry1.example.com/dl/main
 ```
 
 ## Verify (single host)
 
 ```sh
-ssh root@188.225.39.88 'systemctl status nginx nginx-edge-forwarder --no-pager'
-ssh root@188.225.39.88 'grep VPS_INTERNAL_IP /etc/reverse-logger/nginx-edge-forwarder.env'
-ssh root@188.225.39.88 'curl -I https://equipads.ru/not-a-path'
+ssh root@203.0.113.20 'systemctl status nginx nginx-edge-forwarder --no-pager'
+ssh root@203.0.113.20 'grep VPS_INTERNAL_IP /etc/reverse-logger/nginx-edge-forwarder.env'
+ssh root@203.0.113.20 'curl -I https://entry1.example.com/not-a-path'
 ```
 
 ## Rollback
