@@ -217,6 +217,16 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 			return err
 		}
 	}
+	normalizers := []string{
+		"UPDATE ingress_events SET forwarder_ip = '' WHERE forwarder_ip IS NULL",
+		"UPDATE enriched_events SET correlation_method = '' WHERE correlation_method IS NULL",
+		"UPDATE enriched_events SET forwarder_ip = '' WHERE forwarder_ip IS NULL",
+	}
+	for _, stmt := range normalizers {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at)",
 		"CREATE INDEX IF NOT EXISTS idx_events_source_ts ON events(source_ts)",
@@ -880,6 +890,7 @@ type rowScanner interface {
 func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {
 	var event events.IngressEvent
 	var nginxReceivedAt, forwardedAt string
+	var forwarderIP sql.NullString
 	var rawHeaders, rawJSON string
 	if err := row.Scan(
 		&event.EventHash,
@@ -888,7 +899,7 @@ func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {
 		&event.VPSName,
 		&event.VPSPublicIP,
 		&event.VPSInternalIP,
-		&event.ForwarderIP,
+		&forwarderIP,
 		&event.ClientIP,
 		&event.ClientPort,
 		&event.Host,
@@ -906,6 +917,7 @@ func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {
 	); err != nil {
 		return events.IngressEvent{}, err
 	}
+	event.ForwarderIP = forwarderIP.String
 	if nginxReceivedAt != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, nginxReceivedAt); err == nil {
 			event.NginxReceivedAt = parsed

@@ -106,6 +106,59 @@ func TestInsertEdgeEventRollsBackSQLiteWhenJSONLAppendFails(t *testing.T) {
 	}
 }
 
+func TestEnrichHandlesOldIngressRowsWithNullForwarderIP(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	_, err = st.db.Exec(`
+INSERT INTO ingress_events (
+	event_hash, request_id, transport, vps_name, vps_public_ip, vps_internal_ip,
+	client_ip, client_port, host, uri, method, user_agent, upgrade_header,
+	connection_header, x_forwarded_for, polling_key_sha1, nginx_received_at,
+	forwarded_at, raw_headers, raw_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"old-ingress-with-null-forwarder-ip",
+		"",
+		"wss",
+		"vps-1",
+		"",
+		"192.0.2.2",
+		"198.51.100.10",
+		5555,
+		"",
+		"/ws",
+		"GET",
+		"",
+		"websocket",
+		"",
+		"",
+		"",
+		"2026-06-09T12:00:00Z",
+		"2026-06-09T12:00:00Z",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event, err := events.ParseWebhookPayload([]byte(`{"Status":"connected","ID":"abc","IP":"192.0.2.2:1234","HostName":"u.c","Timestamp":"2026-06-09T12:00:05Z"}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched, _, err := st.EnrichAndStoreEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enriched.CorrelationStatus != "matched" {
+		t.Fatalf("correlation_status = %q", enriched.CorrelationStatus)
+	}
+}
+
 func countLines(content []byte) int {
 	lines := 0
 	for _, b := range content {
