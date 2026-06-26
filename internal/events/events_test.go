@@ -218,3 +218,15 @@ func TestValidateIngressRouteAcceptsConfiguredPath(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateIngressRouteAcceptsMultipleConfiguredPaths(t *testing.T) {
+	if err := ValidateIngressRoute(IngressEvent{Transport: "wss", URI: "/track-b"}, "/track-a,/track-b", "/push-a,/push-b"); err != nil {
+		t.Fatalf("expected multi-path wss ingress to pass: %v", err)
+	}
+	if err := ValidateIngressRoute(IngressEvent{Transport: "https", URI: "/push-b?key=abc"}, "/track-a,/track-b", "/push-a,/push-b"); err != nil {
+		t.Fatalf("expected multi-path https ingress to pass: %v", err)
+	}
+	if err := ValidateIngressRoute(IngressEvent{Transport: "wss", URI: "/other"}, "/track-a,/track-b", "/push-a,/push-b"); err == nil {
+		t.Fatal("expected unknown wss path to fail")
+	}
+}

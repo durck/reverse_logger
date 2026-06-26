@@ -29,13 +29,86 @@
     rssh_ws_path: /ws
     rssh_push_path: /push
     rssh_download_path_prefix: /dl
+    main_reverse_ssh_port: 3232
+    main_logger_port: 8080
 
   pre_tasks:
+    - name: Derive backend_reverse_ssh_url from main_internal_ip
+      ansible.builtin.set_fact:
+        backend_reverse_ssh_url: "https://{{ main_internal_ip }}:{{ main_reverse_ssh_port }}"
+      when:
+        - main_internal_ip is defined
+        - main_internal_ip | length > 0
+        - backend_reverse_ssh_url is not defined or backend_reverse_ssh_url | length == 0
+
+    - name: Derive edge_forward_url from main_internal_ip
+      ansible.builtin.set_fact:
+        edge_forward_url: "http://{{ main_internal_ip }}:{{ main_logger_port }}/ingress-events"
+      when:
+        - main_internal_ip is defined
+        - main_internal_ip | length > 0
+        - edge_forward_url is not defined or edge_forward_url | length == 0
+
+    - name: Derive vps_name from inventory hostname
+      ansible.builtin.set_fact:
+        vps_name: "{{ inventory_hostname }}"
+      when: vps_name is not defined or vps_name | length == 0
+
+    - name: Derive vps_public_ip from inventory or default IPv4
+      ansible.builtin.set_fact:
+        vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_default_ipv4.address) }}"
+      when: vps_public_ip is not defined or vps_public_ip | length == 0
+
+    - name: Resolve main reachability target for VPN source detection
+      ansible.builtin.set_fact:
+        main_reachability_ip: >-
+          {{
+            main_internal_ip
+            | default(
+                backend_reverse_ssh_url
+                | regex_replace('^https?://', '')
+                | regex_replace('/.*', '')
+                | regex_replace(':.*', '')
+            )
+          }}
+
+    - name: Detect VPS VPN source IP toward main
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - route
+          - get
+          - "{{ main_reachability_ip }}"
+      register: vps_route_to_main
+      changed_when: false
+      when:
+        - main_reachability_ip is defined
+        - main_reachability_ip | length > 0
+        - vps_internal_ip is not defined or vps_internal_ip | length == 0
+
+    - name: Derive vps_internal_ip from route toward main
+      ansible.builtin.set_fact:
+        vps_internal_ip: "{{ vps_route_to_main.stdout | regex_search('src ([0-9.]+)', '\\1') | first }}"
+      when:
+        - vps_route_to_main is defined
+        - vps_route_to_main.rc == 0
+        - vps_internal_ip is not defined or vps_internal_ip | length == 0
+
+    - name: Derive ACME email from edge domain
+      ansible.builtin.set_fact:
+        nginx_edge_acme_email: "admin@{{ rssh_domain }}"
+      when:
+        - rssh_domain is defined
+        - rssh_domain | length > 0
+        - nginx_edge_acme_email is not defined or nginx_edge_acme_email | length == 0
+
     - name: Validate required variables
       ansible.builtin.assert:
         that:
           - rssh_domain is defined
           - rssh_domain | length > 0
+          - main_internal_ip is defined or backend_reverse_ssh_url is defined
           - backend_reverse_ssh_url is defined
           - backend_reverse_ssh_url | length > 0
           - edge_forward_url is defined
@@ -46,6 +119,7 @@
           - vps_name is defined
           - vps_public_ip is defined
           - vps_internal_ip is defined
+          - vps_internal_ip | length > 0
           - rssh_ws_path is match('^/.+')
           - rssh_push_path is match('^/.+')
           - rssh_ws_path != '/'
@@ -56,7 +130,10 @@
           - rssh_download_path_prefix != '/'
           - rssh_download_path_prefix[-1] != '/'
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
-        fail_msg: Fill deploy/ansible/group_vars/vps_edge.yml before running this playbook.
+        fail_msg: >-
+          Fill deploy/ansible/group_vars/vps_edge.yml and per-host rssh_domain in
+          inventory.ini. Ensure SoftEther/VPN on this VPS can reach main_internal_ip
+          so vps_internal_ip can be detected.
 
     - name: Validate ACME variables
       ansible.builtin.assert:
@@ -477,6 +554,72 @@
         name: nginx-edge-forwarder
         enabled: true
         state: started
+
+  post_tasks:
+    - name: Show edge deployment summary
+      ansible.builtin.debug:
+        msg:
+          - "host={{ inventory_hostname }}"
+          - "domain={{ rssh_domain }}"
+          - "public_ip={{ vps_public_ip }}"
+          - "vpn_ip={{ vps_internal_ip }}"
+          - "trusted_proxy_cidr={{ vps_internal_ip }}/32"
+
+    - name: Build trusted proxy CIDR list for main server
+      ansible.builtin.set_fact:
+        trusted_proxy_cidrs: >-
+          {{
+            groups['vps_edge']
+            | map('extract', hostvars, 'vps_internal_ip')
+            | select('defined')
+            | map('regex_replace', '^(.*)$', '\\1/32')
+            | list
+            | unique
+          }}
+      run_once: true
+      delegate_to: localhost
+
+    - name: Show main server reverse_ssh trusted proxy setting
+      ansible.builtin.debug:
+        msg: >-
+          Add to main /opt/reverse-logger/.env:
+          REVERSE_SSH_TRUSTED_PROXY_CIDR={{ trusted_proxy_cidrs | join(',') }}
+      run_once: true
+      delegate_to: localhost
+
+    - name: Collect ingress transport paths from all edge groups
+      ansible.builtin.set_fact:
+        ingress_ws_paths: >-
+          {{
+            groups['vps_edge']
+            | map('extract', hostvars, 'rssh_ws_path')
+            | select('defined')
+            | list
+            | unique
+          }}
+        ingress_push_paths: >-
+          {{
+            groups['vps_edge']
+            | map('extract', hostvars, 'rssh_push_path')
+            | select('defined')
+            | list
+            | unique
+          }}
+        main_ws_path_value: "{{ hostvars[groups['vps_edge'] | first].main_ws_path | default('/ws') }}"
+        main_push_path_value: "{{ hostvars[groups['vps_edge'] | first].main_push_path | default('/push') }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Show main server ingress path settings
+      ansible.builtin.debug:
+        msg: >-
+          Add to main /opt/reverse-logger/.env (comma-separated for all groups):
+          INGRESS_WS_PATH={{ ingress_ws_paths | join(',') }}
+          INGRESS_PUSH_PATH={{ ingress_push_paths | join(',') }}
+          REVERSE_SSH_WS_PATH={{ main_ws_path_value }}
+          REVERSE_SSH_PUSH_PATH={{ main_push_path_value }}
+      run_once: true
+      delegate_to: localhost
 
   handlers:
     - name: Reload systemd

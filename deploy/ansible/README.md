@@ -1,7 +1,7 @@
 # Ansible VPS Edge Deployment
 
-This playbook installs the nginx WSS/HTTPS entrypoint and
-`nginx-edge-forwarder` on a clean Ubuntu VPS.
+Deploy one or many public VPS edges that terminate TLS and forward to the same
+internal `reverse_ssh` + `rssh-logger` stack over SoftEther/VPN.
 
 Repository references:
 
@@ -14,138 +14,259 @@ The playbook owns the VPS edge layer only:
 - issues a free Let's Encrypt certificate with HTTP-01 webroot validation;
 - clones `reverse_logger`;
 - builds and installs `cmd/nginx-edge-forwarder`;
-- creates `/var/lib/reverse-logger` and the nginx edge spool directory;
-- renders `/etc/reverse-logger/nginx-edge-forwarder.env`;
-- renders nginx with custom WSS and HTTPS polling paths;
+- creates state directories;
+- renders `/etc/reverse-logger/nginx-edge-forwarder.env` per host;
+- renders nginx with custom WSS, HTTPS polling, and `/dl/` download paths;
 - enables and starts nginx and `nginx-edge-forwarder`.
 
-It does not provision SoftEther accounts, DNS records, reverse DNS/PTR records,
-cloud firewall rules, or the main `reverse_ssh` server. DNS and network reachability
-must exist before running the playbook. A self-signed certificate option is
-available only for initial smoke testing when ACME is disabled.
+It does **not** provision SoftEther accounts, DNS records, cloud firewall rules,
+or the main `reverse_ssh` server.
 
-## Prepare Inventory
+## Multi-VPS layout
 
-Copy the examples and edit them:
+```text
+equipads.ru  (188.225.39.88) ──VPN──┐
+entry2.example (203.0.113.20) ─VPN──┼──> main 10.21.125.154
+entry3.example (...)         ─VPN──┘     reverse_ssh :3232
+                                         rssh-logger :8080
+```
+
+## Four edge groups with different transport paths
+
+Use child groups when each fleet gets its own `link` paths but all edges share one
+main `reverse_ssh` listener:
+
+```text
+edge_group_1 -> /track383211 + /ping198287
+edge_group_2 -> /track_group2 + /ping_group2
+edge_group_3 -> ...
+edge_group_4 -> ...
+```
+
+Layout:
+
+```text
+Client (group 1 paths) -> VPS nginx /track383211 -> main reverse_ssh /ws
+Client (group 2 paths) -> VPS nginx /track_group2 -> main reverse_ssh /ws
+```
+
+Files:
+
+```sh
+cp deploy/ansible/group_vars/edge_group_1.example.yml deploy/ansible/group_vars/edge_group_1.yml
+cp deploy/ansible/group_vars/edge_group_2.example.yml deploy/ansible/group_vars/edge_group_2.yml
+cp deploy/ansible/group_vars/edge_group_3.example.yml deploy/ansible/group_vars/edge_group_3.yml
+cp deploy/ansible/group_vars/edge_group_4.example.yml deploy/ansible/group_vars/edge_group_4.yml
+```
+
+Shared backend paths on main live in `group_vars/vps_edge.yml`:
+
+```yaml
+main_ws_path: /ws
+main_push_path: /push
+```
+
+Per-group public paths live in `group_vars/edge_group_N.yml`:
+
+```yaml
+rssh_ws_path: /track383211
+rssh_push_path: /ping198287
+```
+
+Generate one `link` per group on main with the same paths:
+
+```text
+link --wss --ws-path /track383211 --push-path /ping198287 --name dl/main-g1 ...
+```
+
+After deploy, the playbook prints:
+
+```text
+INGRESS_WS_PATH=/track383211,/track_group2,...
+INGRESS_PUSH_PATH=/ping198287,/ping_group2,...
+REVERSE_SSH_WS_PATH=/ws
+REVERSE_SSH_PUSH_PATH=/push
+```
+
+Add those values to main `.env`, recreate `reverse_ssh` and `rssh-logger`, then
+deploy clients from each group's download URL.
+
+Alternative: set `main_reverse_ssh_port` per group and run separate `reverse_ssh`
+listeners on main when you do not want nginx path rewriting.
+
+Each VPS gets:
+
+- its own `rssh_domain` and Let's Encrypt certificate;
+- auto-detected `vps_internal_ip` (VPN source IP toward main);
+- shared `main_internal_ip`, `edge_forward_token`, transport paths.
+
+## Prerequisites (before Ansible)
+
+On **each VPS**:
+
+1. Ubuntu with root SSH access.
+2. SoftEther/VPN client configured and connected to main.
+3. Route to main works: `ip route get <main_internal_ip>` shows a `src` VPN IP.
+4. DNS `A` record: `<rssh_domain>` → public IP of this VPS.
+5. Inbound `80/tcp` and `443/tcp` open.
+
+On **main** (`/opt/reverse-logger`):
+
+1. Stack running with `docker-compose.edge-forward.yml`.
+2. `.env` contains `EDGE_FORWARD_TOKEN`, `REVERSE_SSH_BIND_IP`, matching `INGRESS_*`
+   and `REVERSE_SSH_*` paths.
+
+## Prepare inventory
+
+From the repo root:
 
 ```sh
 cp deploy/ansible/inventory.example.ini deploy/ansible/inventory.ini
 cp deploy/ansible/group_vars/vps_edge.example.yml deploy/ansible/group_vars/vps_edge.yml
-nano deploy/ansible/inventory.ini
-nano deploy/ansible/group_vars/vps_edge.yml
 ```
 
-Set at minimum:
+Or use YAML inventory:
 
-- `rssh_domain`;
-- `backend_reverse_ssh_url`, normally `https://<main_internal_ip>:3232`;
-- `edge_forward_url`, normally `http://<main_internal_ip>:8080/ingress-events`;
-- `edge_forward_token`, copied from the main server `.env`;
-- `vps_name`, `vps_public_ip`, `vps_internal_ip`;
-- `nginx_edge_acme_email`, used for Let's Encrypt registration and expiry notices;
-- `nginx_edge_acme_staging`, set to `true` for the first test run;
-- `rssh_ws_path` and `rssh_push_path`, kept aligned with nginx, forwarder,
-  central `INGRESS_*`, and `reverse_ssh` server/client flags;
-- `rssh_download_path_prefix`, normally `/dl`. Public downloads are
-  `https://<rssh_domain>/dl/<filename>` while `link --name <filename>` serves
-  backend `/<filename>`. The rendered `/dl/` location sets `proxy_buffering off`
-  so large chunked binaries stream without truncation.
+```sh
+cp deploy/ansible/inventory.example.yml deploy/ansible/inventory.yml
+```
 
-Custom paths must be absolute base paths without a trailing slash, for example
-`/ws`, `/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.
+Both inventory files are gitignored once copied.
 
-The rendered nginx config preserves original transport paths for mirror capture
-with `$rssh_mirror_path`. Do not replace `X-Original-Path $uri` in the capture
-location; mirror subrequests use `/_rssh_ingress_capture` as `$uri`.
+### Inventory: groups and hosts
 
-Before running:
+`deploy/ansible/inventory.ini`:
 
-- the DNS A record for `rssh_domain` must point at this VPS public IP;
-- inbound `80/tcp` and `443/tcp` must be allowed by the cloud firewall and OS firewall;
-- PTR/reverse DNS may be configured for operations hygiene, but it is not used
-  by ACME HTTP-01 validation;
-- wildcard certificates are not supported by this HTTP-01 flow; use DNS-01 if
-  wildcard certificates are required.
+```ini
+[vps_edge:children]
+edge_group_1
+edge_group_2
+edge_group_3
+edge_group_4
+
+[edge_group_1]
+equipads ansible_host=188.225.39.88 rssh_domain=equipads.ru
+
+[edge_group_2]
+edge2-a ansible_host=203.0.113.30 rssh_domain=entry2a.example.com
+
+[vps_edge:vars]
+ansible_user=root
+ansible_ssh_pass=your-root-password
+```
+
+Deploy one group only:
+
+```sh
+ansible-playbook vps-edge.yml --limit edge_group_1
+```
+
+Or pass the password interactively:
+
+```sh
+ansible-playbook ... --ask-pass
+```
+
+### Shared group vars
+
+`deploy/ansible/group_vars/vps_edge.yml`:
+
+```yaml
+main_internal_ip: 10.21.125.154
+edge_forward_token: <from main .env>
+redirect_target: https://ya.ru
+main_ws_path: /ws
+main_push_path: /push
+```
+
+Per-group `rssh_ws_path` / `rssh_push_path` stay in `group_vars/edge_group_N.yml`.
+Per-host `rssh_domain` stays in inventory.
+
+### Auto-derived per VPS
+
+| Variable | Source |
+|----------|--------|
+| `backend_reverse_ssh_url` | `https://<main_internal_ip>:3232` |
+| `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events` |
+| `vps_name` | inventory hostname |
+| `vps_public_ip` | `ansible_host` |
+| `vps_internal_ip` | `ip route get <main_internal_ip>` → `src` |
+| `nginx_edge_acme_email` | `admin@<rssh_domain>` |
 
 ## Run
+
+From `deploy/ansible` (uses local `ansible.cfg`):
+
+```sh
+cd deploy/ansible
+ansible-playbook vps-edge.yml
+```
+
+From repo root:
 
 ```sh
 ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
 ```
 
-Use staging first to avoid production rate limits while validating DNS and firewall:
+Limit to one host:
 
 ```sh
-ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml \
-  -e nginx_edge_acme_staging=true
+ansible-playbook vps-edge.yml --limit equipads
 ```
 
-For a temporary smoke certificate:
+Staging certificates first:
 
 ```sh
-ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml \
-  -e nginx_edge_acme_enabled=false \
-  -e nginx_edge_create_self_signed_cert=true \
-  -e tls_cert_path=/etc/reverse-logger/tls/fullchain.pem \
-  -e tls_key_path=/etc/reverse-logger/tls/privkey.pem
+ansible-playbook vps-edge.yml -e nginx_edge_acme_staging=true
 ```
 
-Do not run `certbot --nginx` for this entrypoint. The playbook uses
-`certbot certonly --webroot` so Certbot never rewrites Ansible-managed nginx
-configuration.
-
-## Verify
+Check SSH before the full run:
 
 ```sh
-ssh <vps> 'systemctl status nginx nginx-edge-forwarder --no-pager'
-ssh <vps> 'journalctl -u nginx-edge-forwarder -n 100 --no-pager'
-ssh <vps> 'tail -n 20 /var/log/nginx/reverse_ssh_ingress.json'
-ssh <vps> 'test -f /etc/letsencrypt/live/<rssh_domain>/fullchain.pem'
-ssh <vps> 'curl -I http://<rssh_domain>/.well-known/acme-challenge/test || true'
+ansible vps_edge -m ping
 ```
 
-The main server must run `rssh-logger` with
-`docker-compose.edge-forward.yml`, and `reverse_ssh` should trust only the VPS
-nginx source when real-IP headers are enabled:
+## After deploy
 
-```sh
-docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
-```
-
-The main server `reverse_ssh` listener must use the same paths as the VPS
-nginx edge. In this repository's Docker stack, set:
+The playbook prints a summary per host and a combined line for main:
 
 ```text
-REVERSE_SSH_WS_PATH=/ws
-REVERSE_SSH_PUSH_PATH=/push
-REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32
-INGRESS_WS_PATH=/ws
-INGRESS_PUSH_PATH=/push
+REVERSE_SSH_TRUSTED_PROXY_CIDR=10.21.125.98/32,10.21.125.99/32
 ```
 
-Then recreate the listener:
+Add that to main `.env`, then recreate listeners:
 
 ```sh
+cd /opt/reverse-logger
 docker compose up -d --force-recreate reverse_ssh rssh-logger
 ```
 
-Use the same custom paths in generated clients:
-
-```text
-link --wss --ws-path /ws --push-path /push --name main
-```
-
-Verify a download path reaches `reverse_ssh` instead of the decoy redirect:
+Verify each edge:
 
 ```sh
-curl -I https://<rssh_domain>/dl/main
+ansible vps_edge -m shell -a 'systemctl is-active nginx nginx-edge-forwarder'
+curl -I https://equipads.ru/dl/main
+```
+
+## Verify (single host)
+
+```sh
+ssh root@188.225.39.88 'systemctl status nginx nginx-edge-forwarder --no-pager'
+ssh root@188.225.39.88 'grep VPS_INTERNAL_IP /etc/reverse-logger/nginx-edge-forwarder.env'
+ssh root@188.225.39.88 'curl -I https://equipads.ru/not-a-path'
 ```
 
 ## Rollback
 
 ```sh
-ssh <vps> 'sudo systemctl disable --now nginx-edge-forwarder'
-ssh <vps> 'sudo rm -f /etc/systemd/system/nginx-edge-forwarder.service'
-ssh <vps> 'sudo rm -f /etc/nginx/sites-enabled/rssh-entrypoint.conf /etc/nginx/sites-available/rssh-entrypoint.conf'
-ssh <vps> 'sudo systemctl reload nginx'
+ansible vps_edge -b -m systemd -a 'name=nginx-edge-forwarder enabled=no state=stopped'
+ansible vps_edge -b -m file -a 'path=/etc/nginx/sites-enabled/rssh-entrypoint.conf state=absent'
+ansible vps_edge -b -m systemd -a 'name=nginx state=reloaded'
 ```
+
+## Notes
+
+- Custom transport paths must match main `.env`, forwarder `RSSH_*`, and `link --wss`.
+- `/dl/` uses `proxy_buffering off` for large client binaries.
+- Mirror capture requires `$rssh_mirror_path` in the nginx template (already rendered).
+- Do not run `certbot --nginx`; the playbook uses `certbot certonly --webroot`.

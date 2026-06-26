@@ -1,27 +1,23 @@
-reverse_logger_repo_url: https://github.com/durck/reverse_logger.git
-reverse_logger_repo_version: main
-reverse_logger_src_dir: /opt/reverse-logger
+# Copy shared vars to group_vars/vps_edge.yml (gitignored).
+# Per-group transport paths live in group_vars/edge_group_*.yml.
 
-rssh_domain: secret-entry.example.com
-backend_reverse_ssh_url: https://192.0.2.10:3232
-redirect_target: https://example.com
+redirect_target: https://ya.ru
 
-edge_forward_url: http://192.0.2.10:8080/ingress-events
+main_internal_ip: 10.21.125.154
+main_reverse_ssh_port: 3232
+main_logger_port: 8080
+
+# reverse_ssh listener paths on main. Edge groups may expose different public
+# paths; nginx rewrites public paths to these backend paths.
+main_ws_path: /ws
+main_push_path: /push
+
 edge_forward_token: replace_with_EDGE_FORWARD_TOKEN
 
-vps_name: vps-1
-vps_public_ip: 198.51.100.10
-# SoftEther/VPN address as seen by the main server, not the VPS LAN address.
-vps_internal_ip: 192.0.2.2
-
-rssh_ws_path: /ws
-rssh_push_path: /push
-# Public nginx prefix for downloads. link --name <filename>; clients fetch
-# https://<rssh_domain>/dl/<filename> and nginx proxies to /<filename>.
 rssh_download_path_prefix: /dl
 
+nginx_edge_acme_email: ""
 nginx_edge_acme_enabled: true
-nginx_edge_acme_email: admin@example.com
 nginx_edge_acme_webroot: /var/www/letsencrypt
 nginx_edge_acme_staging: false
 tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"

@@ -340,23 +340,50 @@ func validateIngressEvent(event IngressEvent) error {
 }
 
 func ValidateIngressRoute(event IngressEvent, wsPath, pushPath string) error {
-	wsPath = NormalizeIngressPath(wsPath, DefaultWSPath)
-	pushPath = NormalizeIngressPath(pushPath, DefaultPushPath)
 	path, err := ingressURIPath(event.URI)
 	if err != nil {
 		return err
 	}
 	switch event.Transport {
 	case "wss":
-		if path != wsPath {
+		if !ingressPathAllowed(path, wsPath, DefaultWSPath) {
 			return errors.New("wss ingress uri does not match configured ws path")
 		}
 	case "https":
-		if path != pushPath {
+		if !ingressPathAllowed(path, pushPath, DefaultPushPath) {
 			return errors.New("https ingress uri does not match configured push path")
 		}
 	}
 	return nil
+}
+
+func ParseIngressPaths(configured, fallback string) []string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return []string{NormalizeIngressPath(fallback, fallback)}
+	}
+	parts := strings.Split(configured, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = NormalizeIngressPath(part, "")
+		if part == "" || part == "/" {
+			continue
+		}
+		out = append(out, part)
+	}
+	if len(out) == 0 {
+		return []string{NormalizeIngressPath(fallback, fallback)}
+	}
+	return out
+}
+
+func ingressPathAllowed(path, configured, fallback string) bool {
+	for _, candidate := range ParseIngressPaths(configured, fallback) {
+		if path == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeIngressPath(path, fallback string) string {

@@ -2,6 +2,9 @@
 # nginx-edge-forwarder RSSH_* values, central logger INGRESS_* values, and
 # Public {{ rssh_download_path_prefix }}/<filename> -> backend /<filename>
 # (link --name <filename>). proxy_pass trailing slash strips the prefix.
+{% set backend_ws_path = main_ws_path | default(rssh_ws_path) %}
+{% set backend_push_path = main_push_path | default(rssh_push_path) %}
+{% set backend_reverse_ssh_base = backend_reverse_ssh_url | regex_replace('/$', '') %}
 
 map "$request_method:$uri:$http_upgrade:$arg_key" $rssh_transport {
     default "";
@@ -97,7 +100,7 @@ server {
         }
 
         mirror /_rssh_ingress_capture;
-        proxy_pass {{ backend_reverse_ssh_url }};
+        proxy_pass {{ backend_reverse_ssh_base }}{{ backend_ws_path }};
         proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
@@ -117,7 +120,7 @@ server {
         set $rssh_mirror_request_uri $request_uri;
 
         mirror /_rssh_ingress_capture;
-        proxy_pass {{ backend_reverse_ssh_url }};
+        proxy_pass {{ backend_reverse_ssh_base }}{{ backend_push_path }};
         proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -130,7 +133,7 @@ server {
     }
 
     location ^~ {{ rssh_push_path }}/ {
-        proxy_pass {{ backend_reverse_ssh_url }};
+        proxy_pass {{ backend_reverse_ssh_base }}{{ backend_push_path }}/;
         proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

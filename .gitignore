@@ -7,5 +7,6 @@ dist/
 *.log
 *.exe
 deploy/ansible/inventory.ini
+deploy/ansible/inventory.yml
 deploy/ansible/group_vars/vps_edge.yml
 *.retry

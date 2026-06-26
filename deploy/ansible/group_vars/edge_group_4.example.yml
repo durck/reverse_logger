@@ -1,0 +1,6 @@
+# Copy to group_vars/edge_group_4.yml
+
+rssh_ws_path: /track_group4
+rssh_push_path: /ping_group4
+
+# main_reverse_ssh_port: 3235
