@@ -56,7 +56,7 @@
 
     - name: Derive vps_public_ip from inventory or default IPv4
       ansible.builtin.set_fact:
-        vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_default_ipv4.address) }}"
+        vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_facts.get('default_ipv4', {}).get('address', ''), true) }}"
       when: vps_public_ip is not defined or vps_public_ip | length == 0
 
     - name: Resolve main reachability target for VPN source detection
@@ -169,7 +169,7 @@
           - openssl
         update_cache: true
         state: present
-      when: ansible_os_family == 'Debian'
+      when: ansible_facts['os_family'] == 'Debian'
 
     - name: Check reverse_ssh backend reachability from VPS
       ansible.builtin.wait_for:
@@ -198,7 +198,7 @@
         name: snapd
         state: present
       when:
-        - ansible_os_family == 'Debian'
+        - ansible_facts['os_family'] == 'Debian'
         - nginx_edge_acme_enabled | bool
 
     - name: Enable snapd socket
