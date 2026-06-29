@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fix Timeweb DNS-01 ACME fallback availability checks for vaulted tokens.
 - Add automatic Ansible HTTP-01 to Timeweb DNS-01 ACME fallback when HTTP
   certificate issuance fails and a Timeweb token is configured.
 - Add optional persisted per-host random WSS, HTTPS polling, and download

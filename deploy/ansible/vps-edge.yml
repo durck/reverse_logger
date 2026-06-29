@@ -175,29 +175,12 @@
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
 
-    - name: Derive Timeweb DNS-01 fallback availability
-      ansible.builtin.set_fact:
-        nginx_edge_acme_dns_timeweb_available: >-
-          {{
-            timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          }}
-        nginx_edge_acme_dns_timeweb_required: >-
-          {{
-            nginx_edge_acme_enabled | bool
-            and (
-              nginx_edge_acme_challenge == 'dns-timeweb'
-              or (
-                nginx_edge_acme_challenge == 'http-01'
-                and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-                and timewebcloud_auth_token is defined
-                and (timewebcloud_auth_token | default('', true) | length > 20)
-                and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-              )
-            )
-          }}
-      no_log: true
+    - name: Show ACME Timeweb DNS-01 fallback status
+      ansible.builtin.debug:
+        msg:
+          - "acme_challenge={{ nginx_edge_acme_challenge }}"
+          - "http01_fallback_to_dns_timeweb={{ nginx_edge_acme_http01_fallback_to_dns_timeweb | bool }}"
+          - "timeweb_token_available={{ timewebcloud_auth_token is defined and (timewebcloud_auth_token | default('', true) | length > 20) and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN' }}"
       when: nginx_edge_acme_enabled | bool
 
     - name: Validate Timeweb DNS-01 ACME variables
@@ -211,7 +194,13 @@
         fail_msg: Set timewebcloud_auth_token for Timeweb DNS-01 issuance.
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_challenge == 'dns-timeweb'
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+          )
       no_log: true
 
     - name: Validate production certificate paths
@@ -339,7 +328,15 @@
         - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_dns_timeweb_required | default(false) | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
     - name: Trust Certbot snap plugins with root
       ansible.builtin.command:
@@ -351,7 +348,15 @@
       changed_when: false
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_dns_timeweb_required | default(false) | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
     - name: Connect certbot-dns-multi plugin
       ansible.builtin.command:
@@ -367,7 +372,15 @@
         - "'already connected' not in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)"
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_dns_timeweb_required | default(false) | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
     - name: Link Certbot into /usr/bin
       ansible.builtin.file:
@@ -386,7 +399,15 @@
         mode: "0700"
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_dns_timeweb_required | default(false) | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
     - name: Render Timeweb DNS-01 credentials
       ansible.builtin.copy:
@@ -402,7 +423,15 @@
       no_log: true
       when:
         - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_dns_timeweb_required | default(false) | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
   tasks:
     - name: Create repository parent directory
@@ -682,7 +711,9 @@
         - certbot_http_issue is defined
         - certbot_http_issue.rc != 0
         - nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-        - nginx_edge_acme_dns_timeweb_available | default(false) | bool
+        - timewebcloud_auth_token is defined
+        - timewebcloud_auth_token | default('', true) | length > 20
+        - timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
 
     - name: Fail when HTTP-01 failed and Timeweb DNS-01 fallback is unavailable
       ansible.builtin.fail:
@@ -696,7 +727,13 @@
         - nginx_edge_acme_challenge == 'http-01'
         - certbot_http_issue is defined
         - certbot_http_issue.rc != 0
-        - not (nginx_edge_acme_http01_fallback_to_dns_timeweb | bool and nginx_edge_acme_dns_timeweb_available | default(false) | bool)
+        - >-
+          not (
+            nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
 
     - name: Create Certbot renewal hook directory
       ansible.builtin.file:
