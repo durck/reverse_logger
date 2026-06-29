@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a main-observed source IP probe for Ansible VPS deployments and stop
+  treating the VPS route source address as `VPS_INTERNAL_IP`.
 - Pass explicit dns-multi propagation settings for Timeweb DNS-01 ACME and
   allow skipping target-side GitHub fetches when a checkout already exists.
 - Harden Ansible ACME issuance around preflight fallback, cert/key validation,

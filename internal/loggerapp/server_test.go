@@ -160,6 +160,96 @@ func TestEdgeEventEndpointRecomputesClientHash(t *testing.T) {
 	}
 }
 
+func TestSourceIPEndpointReportsRemoteAddr(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	req := httptest.NewRequest(http.MethodGet, "/edge/source-ip/edge-secret", nil)
+	req.RemoteAddr = "192.0.2.44:53000"
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		SourceIP   string `json:"source_ip"`
+		RemoteAddr string `json:"remote_addr"`
+		SeenAt     string `json:"seen_at"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SourceIP != "192.0.2.44" || response.RemoteAddr != "192.0.2.44:53000" || response.SeenAt == "" {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+}
+
+func TestSourceIPEndpointAcceptsBearerToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	req := httptest.NewRequest(http.MethodGet, "/edge/source-ip", nil)
+	req.RemoteAddr = "[2001:db8::10]:53000"
+	req.Header.Set("Authorization", "Bearer edge-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		SourceIP string `json:"source_ip"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.SourceIP != "2001:db8::10" {
+		t.Fatalf("source_ip = %q", response.SourceIP)
+	}
+}
+
+func TestSourceIPEndpointRejectsWrongToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	req := httptest.NewRequest(http.MethodGet, "/edge/source-ip/wrong", nil)
+	req.RemoteAddr = "192.0.2.44:53000"
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEdgeEventEndpointRejectsInvalidClientIP(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

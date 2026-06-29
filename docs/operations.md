@@ -65,6 +65,8 @@ sqlite3 /opt/reverse-logger/data/logger/events.db \
 The logger records `forwarder_ip` from the HTTP source address of the
 `/ingress-events` request. This often recovers correlation when
 `VPS_INTERNAL_IP` is empty or set to the wrong VPS-side address.
+From the VPS, call `/edge/source-ip/<EDGE_FORWARD_TOKEN>` on the main logger to
+detect the source IP that main actually observes.
 
 ## Backup
 
@@ -155,8 +157,10 @@ Large `link` download stops early (`curl: (18)`, partial file size):
 1. Confirm `ingress_events.jsonl` receives events for the same session.
 2. Check `correlation_method` and `forwarder_ip` in `enriched_events`.
 3. Set forwarder `VPS_INTERNAL_IP` to the address main sees in webhook
-   `ip_raw` (SoftEther/VPN source), not the VPS private LAN IP. If this value
-   is missing or wrong, central `forwarder_ip` is tried automatically.
+   `ip_raw` (SoftEther/VPN source), not the VPS private LAN IP. From the VPS,
+   call `/edge/source-ip/<EDGE_FORWARD_TOKEN>` on the main logger to detect it.
+   If this value is missing or wrong, central `forwarder_ip` is tried
+   automatically.
 4. Keep `RSSH_WS_PATH` / `RSSH_PUSH_PATH` aligned across nginx, forwarder,
    main `INGRESS_*`, and `REVERSE_SSH_*`.
 5. If clocks or forwarding are delayed, increase:

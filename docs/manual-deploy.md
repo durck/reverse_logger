@@ -434,7 +434,9 @@ Set at minimum:
 - `VPS_NAME`, `VPS_PUBLIC_IP`, `VPS_INTERNAL_IP`.
 - `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, matching the main `.env`.
 
-`VPS_INTERNAL_IP` should still be set correctly, but the central logger also
+`VPS_INTERNAL_IP` should be the source IP observed by the main server, not the
+VPS interface address. You can read it from the main logger by calling
+`/edge/source-ip/<EDGE_FORWARD_TOKEN>` from the VPS. The central logger also
 records the observed source IP of the forwarder request as `forwarder_ip` and
 uses it as a correlation fallback.
 
@@ -621,10 +623,11 @@ Use absolute base paths without a trailing slash, for example `/ws`,
 `/rssh-ws`, `/push`, `/rssh-push`, or `/dl`.
 
 When nginx is in front of `reverse_ssh`, set
-`REVERSE_SSH_TRUSTED_PROXY_CIDR=<vps_internal_ip>/32` or a narrower CIDR that
-contains only trusted VPS nginx sources, then recreate the `reverse_ssh`
-container. The nginx route overwrites `X-Real-IP` and `X-Forwarded-For` with
-`$remote_addr`; do not accept those headers from untrusted sources.
+`REVERSE_SSH_TRUSTED_PROXY_CIDR=<main-observed-vps-source-ip>/32` or a narrower
+CIDR that contains only trusted VPS nginx sources, then recreate the
+`reverse_ssh` container. The nginx route overwrites `X-Real-IP` and
+`X-Forwarded-For` with `$remote_addr`; do not accept those headers from
+untrusted sources.
 
 Do not run `certbot --nginx` against this entrypoint because this repository's
 template owns the nginx configuration. If you later want the same nginx edge

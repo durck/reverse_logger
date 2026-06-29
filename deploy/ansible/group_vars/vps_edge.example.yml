@@ -48,6 +48,13 @@ nginx_edge_acme_http01_fallback_to_dns_timeweb: true
 # DNS, port 80, or nginx webroot routing is wrong.
 nginx_edge_acme_http01_preflight_enabled: true
 nginx_edge_acme_http01_preflight_timeout: 10
+# When vps_internal_ip is not set explicitly, query the main logger for the
+# source IP it sees from this VPS. Leave required=false to fall back to the
+# logger's observed forwarder_ip when the probe is unavailable.
+vps_internal_ip_probe_enabled: true
+vps_internal_ip_probe_required: false
+vps_internal_ip_probe_timeout: 5
+vps_internal_ip_probe_validate_certs: true
 # When ACME is enabled, keep these paths aligned with nginx_edge_acme_cert_name.
 tls_cert_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/fullchain.pem"
 tls_key_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/privkey.pem"

@@ -104,7 +104,8 @@ listeners on main when you do not want nginx path rewriting.
 Each VPS gets:
 
 - its own `rssh_domain` and Let's Encrypt certificate;
-- optional auto-detected `vps_internal_ip` (VPN source IP toward main);
+- optional auto-detected `vps_internal_ip` from the main logger's observed
+  source IP probe;
 - shared `main_internal_ip`, `edge_forward_token`, transport paths.
 
 ## Prerequisites (before Ansible)
@@ -113,9 +114,11 @@ On **each VPS**:
 
 1. Ubuntu with root SSH access.
 2. SoftEther/VPN client configured and connected to main.
-3. Route to main works: `ip route get <main_internal_ip>` should show a `src` VPN IP.
-   If it does not, deployment still works, but trusted proxy CIDR output is skipped
-   and central event correlation falls back to observed `forwarder_ip`.
+3. Route to main works: the VPS can reach
+   `http://<main_internal_ip>:8080/edge/source-ip/<EDGE_FORWARD_TOKEN>`. If the
+   probe is unavailable, deployment still works, but trusted proxy CIDR output
+   is skipped and central event correlation falls back to observed
+   `forwarder_ip`.
 4. DNS `A` record: `<rssh_domain>` → public IP of this VPS.
 5. Inbound `443/tcp` open. Inbound `80/tcp` is required only for the default
    HTTP-01 ACME challenge.
@@ -407,7 +410,7 @@ Set it back to `false` after the migration.
 | `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events` |
 | `vps_name` | inventory hostname |
 | `vps_public_ip` | `ansible_host` |
-| `vps_internal_ip` | optional `ip route get <main_internal_ip>` → `src` |
+| `vps_internal_ip` | optional `/edge/source-ip` response from main logger |
 | `nginx_edge_acme_email` | `admin@<rssh_domain>` |
 
 ## Run
@@ -538,8 +541,8 @@ REVERSE_SSH_TRUSTED_PROXY_CIDR=192.0.2.98/32,192.0.2.99/32
 ```
 
 Add that to main `.env` when it is printed. If no `vps_internal_ip` was
-detected, keep the existing trusted proxy value and rely on central
-`forwarder_ip` correlation fallback.
+detected by the main-observed source IP probe, keep the existing trusted proxy
+value and rely on central `forwarder_ip` correlation fallback.
 
 Then recreate listeners:
 

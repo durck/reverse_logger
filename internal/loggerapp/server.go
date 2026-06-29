@@ -45,6 +45,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/hooks/", s.handleWebhook)
 	mux.HandleFunc("/edge-events/", s.handleEdgeEvent)
+	mux.HandleFunc("/edge/source-ip", s.handleSourceIP)
+	mux.HandleFunc("/edge/source-ip/", s.handleSourceIP)
 	mux.HandleFunc("/ingress-events/", s.handleIngressEvent)
 	return mux
 }
@@ -171,6 +173,28 @@ func (s *Server) handleEdgeEvent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleSourceIP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !tokenMatches(edgeAuthToken(r, "/edge/source-ip/"), s.edgeForwardToken) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	sourceIP := remoteIPFromRequest(r.RemoteAddr)
+	if sourceIP == "" {
+		writeError(w, http.StatusBadRequest, "remote address is not a valid IP address")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source_ip":   sourceIP,
+		"remote_addr": strings.TrimSpace(r.RemoteAddr),
+		"seen_at":     time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
 func (s *Server) handleIngressEvent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -231,6 +255,24 @@ func tokenFromPath(path, prefix string) string {
 		return ""
 	}
 	return token
+}
+
+func edgeAuthToken(r *http.Request, pathPrefix string) string {
+	if token := bearerToken(r.Header.Get("Authorization")); token != "" {
+		return token
+	}
+	if strings.HasPrefix(r.URL.Path, pathPrefix) {
+		return tokenFromPath(r.URL.Path, pathPrefix)
+	}
+	return ""
+}
+
+func bearerToken(header string) string {
+	parts := strings.Fields(strings.TrimSpace(header))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
 }
 
 func remoteIPFromRequest(remoteAddr string) string {

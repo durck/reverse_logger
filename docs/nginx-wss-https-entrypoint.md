@@ -363,10 +363,11 @@ avoids `226/NAMESPACE` when an older unit without `StateDirectory=` is still
 installed.
 
 Set `VPS_INTERNAL_IP` to the address the **main server** sees for this VPS on the
-SoftEther path (for example `10.21.125.98`), not the VPS LAN address. The
-central logger matches ingress events to webhooks using that value. The logger
-also stores the observed HTTP source address of the forwarder as `forwarder_ip`
-and uses it when `VPS_INTERNAL_IP` is absent or wrong.
+SoftEther path (for example `10.21.125.98`), not the VPS LAN address. Ansible can
+detect this by calling the main logger's `/edge/source-ip` endpoint from the VPS.
+The central logger matches ingress events to webhooks using that value. The
+logger also stores the observed HTTP source address of the forwarder as
+`forwarder_ip` and uses it when `VPS_INTERNAL_IP` is absent or wrong.
 
 Check:
 

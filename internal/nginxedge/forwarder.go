@@ -125,7 +125,7 @@ func (f *Forwarder) ParseLine(line []byte) (events.IngressEvent, bool, error) {
 		Transport:       transport,
 		VPSName:         f.config.VPSName,
 		VPSPublicIP:     f.config.VPSPublicIP,
-		VPSInternalIP:   defaultString(f.config.VPSInternalIP, entry.ServerAddr),
+		VPSInternalIP:   strings.TrimSpace(f.config.VPSInternalIP),
 		ClientIP:        entry.RemoteAddr,
 		ClientPort:      clientPort,
 		Host:            entry.Host,

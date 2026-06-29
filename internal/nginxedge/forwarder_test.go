@@ -55,6 +55,25 @@ func TestParseLineCapturesHTTPSInitAndHashesKey(t *testing.T) {
 	}
 }
 
+func TestParseLineDoesNotFallbackVPSInternalIPToNginxServerAddr(t *testing.T) {
+	forwarder := New(Config{
+		VPSName:  "vps-1",
+		PushPath: "/secret-push",
+	})
+
+	line := []byte(`{"ts":"2026-06-09T12:00:00Z","remote_addr":"198.51.100.10","remote_port":"5555","request_method":"HEAD","request_uri":"/secret-push?key=abcdef","uri":"/secret-push","server_addr":"10.0.0.5"}`)
+	event, ok, err := forwarder.ParseLine(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected HTTPS init line to be captured")
+	}
+	if event.VPSInternalIP != "" {
+		t.Fatalf("vps_internal_ip = %q, want empty", event.VPSInternalIP)
+	}
+}
+
 func TestParseLineIgnoresHTTPSPollingNoise(t *testing.T) {
 	forwarder := New(Config{VPSName: "vps-1", PushPath: "/push"})
 	for _, line := range [][]byte{
