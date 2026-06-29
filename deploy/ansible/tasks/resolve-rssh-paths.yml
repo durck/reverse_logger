@@ -1,4 +1,16 @@
 ---
+- name: Apply default random path resolver variables
+  ansible.builtin.set_fact:
+    rssh_random_paths_enabled: "{{ rssh_random_paths_enabled | default(false, true) }}"
+    rssh_random_paths_force: "{{ rssh_random_paths_force | default(false, true) }}"
+    rssh_random_paths_allow_regenerate: "{{ rssh_random_paths_allow_regenerate | default(true, true) }}"
+    rssh_random_paths_regenerate: "{{ rssh_random_paths_regenerate | default(false, true) }}"
+    rssh_random_paths_create_state: "{{ rssh_random_paths_create_state | default(true, true) }}"
+    rssh_random_paths_state_dir: "{{ rssh_random_paths_state_dir | default(playbook_dir ~ '/.generated-paths', true) }}"
+    rssh_random_path_min_length: "{{ rssh_random_path_min_length | default(6, true) }}"
+    rssh_random_path_max_length: "{{ rssh_random_path_max_length | default(15, true) }}"
+    rssh_random_path_chars: "{{ rssh_random_path_chars | default('ascii_lowercase,digits', true) }}"
+
 - name: Apply default public paths
   ansible.builtin.set_fact:
     rssh_ws_path: "{{ rssh_ws_path | default('/ws', true) }}"
@@ -45,6 +57,17 @@
   register: rssh_random_path_state_file
   when: rssh_random_paths_enabled | bool
 
+- name: Fail when persisted random path state is missing in read-only mode
+  ansible.builtin.fail:
+    msg: >-
+      Persisted random path state is missing for {{ inventory_hostname }} under
+      {{ rssh_random_paths_state_dir }}. Run vps-edge.yml or edge-and-links.yml
+      first so nginx, forwarder env, and generated links stay aligned.
+  when:
+    - rssh_random_paths_enabled | bool
+    - not (rssh_random_path_state_file.stat.exists | default(false))
+    - not (rssh_random_paths_create_state | bool)
+
 - name: Create persisted random path state
   ansible.builtin.copy:
     dest: "{{ rssh_random_paths_state_dir }}/{{ inventory_hostname }}.yml"
@@ -60,6 +83,7 @@
   when:
     - rssh_random_paths_enabled | bool
     - not (rssh_random_path_state_file.stat.exists | default(false))
+    - rssh_random_paths_create_state | bool
 
 - name: Load persisted random path state
   ansible.builtin.include_vars:

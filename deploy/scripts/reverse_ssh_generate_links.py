@@ -13,6 +13,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 SAFE_TRANSPORTS = {"wss", "https"}
@@ -219,14 +220,37 @@ def run_console_commands(
         except OSError:
             pass
 
+    return_code = proc.poll()
+    if return_code != 0:
+        excerpt = output.decode("utf-8", errors="replace")[-2000:]
+        fail(f"reverse_ssh console SSH exited with status {return_code}: {excerpt}")
+
     return output.decode("utf-8", errors="replace")
+
+
+def listing_line_has_exact_name(line: str, name: str) -> bool:
+    token_boundary = re.compile(
+        rf"(?<![A-Za-z0-9_.:@/+={{}}\-]){re.escape(name)}(?![A-Za-z0-9_.:@/+={{}}\-])"
+    )
+    if token_boundary.search(line):
+        return True
+    for raw_token in line.split():
+        token = raw_token.strip(" \t\r\n,;|()[]<>\"'")
+        if token == name:
+            return True
+        parsed = urlparse(token)
+        if parsed.scheme and parsed.netloc:
+            path = parsed.path.strip("/")
+            if path == name or path.endswith("/" + name):
+                return True
+    return False
 
 
 def existing_names_from_listing(listing: str, planned_names: set[str]) -> set[str]:
     existing: set[str] = set()
     lines = listing.splitlines()
     for name in planned_names:
-        if any(name in line for line in lines):
+        if any(listing_line_has_exact_name(line, name) for line in lines):
             existing.add(name)
     return existing
 
@@ -279,6 +303,8 @@ def main() -> int:
     timeout = int(console.get("timeout", 60))
     command_delay = float(console.get("command_delay", 1.0))
     planned_names = {item["name"] for item in planned}
+    if len(planned_names) != len(planned):
+        fail("reverse_ssh_link_name_template produced duplicate link names")
 
     if args.execute:
         listing = run_console_commands(console, ["link -l"], timeout=timeout, command_delay=command_delay)
@@ -306,6 +332,11 @@ def main() -> int:
     transcript = ""
     if args.execute and commands_to_run:
         transcript = run_console_commands(console, commands_to_run, timeout=timeout, command_delay=command_delay)
+        listing_after = run_console_commands(console, ["link -l"], timeout=timeout, command_delay=command_delay)
+        confirmed = existing_names_from_listing(listing_after, {item["name"] for item in created})
+        missing = sorted({item["name"] for item in created} - confirmed)
+        if missing:
+            fail(f"created link names were not confirmed by link -l: {', '.join(missing)}")
 
     result = {
         "execute": args.execute,

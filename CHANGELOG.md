@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix Ansible link generation limits, persisted random path reuse, SSH failure
+  detection, exact existing-link matching, and idempotent edge forwarder builds.
 - Add an Ansible HTTP-01 preflight check before certbot to avoid burning ACME
   authorization attempts when DNS, port 80, or nginx webroot routing is wrong.
 - Fix Ansible play defaults overriding `group_vars/vps_edge.yml` edge settings.

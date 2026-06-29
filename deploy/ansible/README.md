@@ -266,7 +266,9 @@ ansible-playbook edge-and-links.yml \
 
 `reverse-ssh-links.yml` only reads the persisted state; it does not regenerate
 paths by itself. Regenerate through `vps-edge.yml` or `edge-and-links.yml` so
-nginx, the forwarder env, and generated client links stay aligned.
+nginx, the forwarder env, and generated client links stay aligned. If random
+paths are enabled but the persisted state file is missing, link generation
+fails instead of silently creating a new client callback path.
 
 ### Main link generation vars
 
@@ -423,10 +425,19 @@ ansible-playbook vps-edge.yml --limit edge1
 ```
 
 When using `edge-and-links.yml` with `--limit`, include the main host too so
-the second play can connect to the `reverse_ssh` console:
+the second play can connect to the `reverse_ssh` console. Link generation uses
+only the selected edge hosts from the first play:
 
 ```sh
 ansible-playbook edge-and-links.yml --limit edge1,main1
+```
+
+For `reverse-ssh-links.yml`, pass explicit target edges when you intentionally
+want to bypass the first `vps_edge` selection play:
+
+```sh
+ansible-playbook reverse-ssh-links.yml \
+  -e 'reverse_ssh_target_edges=["edge1"]'
 ```
 
 Staging certificates first:
@@ -462,7 +473,7 @@ Hosts that fail readiness are skipped and do not get links. If no host is ready,
 the playbook fails without creating anything.
 
 Idempotency is name-based. The helper runs `link -l` in the main
-`reverse_ssh` console and skips names that already exist:
+`reverse_ssh` console and skips exact names that already exist:
 
 ```sh
 ansible-playbook reverse-ssh-links.yml

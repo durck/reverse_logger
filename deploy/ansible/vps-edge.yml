@@ -79,19 +79,25 @@
         vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_facts.get('default_ipv4', {}).get('address', ''), true) }}"
       when: vps_public_ip is not defined or vps_public_ip | length == 0
 
+    - name: Extract backend and logger URL authorities
+      ansible.builtin.set_fact:
+        backend_reverse_ssh_authority: "{{ backend_reverse_ssh_url | default('', true) | regex_replace('^[A-Za-z][A-Za-z0-9+.-]*://', '') | regex_replace('/.*$', '') }}"
+        edge_forward_authority: "{{ edge_forward_url | default('', true) | regex_replace('^[A-Za-z][A-Za-z0-9+.-]*://', '') | regex_replace('/.*$', '') }}"
+
+    - name: Resolve backend and logger reachability endpoints
+      ansible.builtin.set_fact:
+        backend_reverse_ssh_host: "{{ backend_reverse_ssh_authority | regex_replace(':([0-9]+)$', '') }}"
+        backend_reverse_ssh_port_resolved: "{{ (backend_reverse_ssh_authority | regex_search(':([0-9]+)$', '\\1') | default([main_reverse_ssh_port], true) | first) | int }}"
+        edge_forward_host: "{{ edge_forward_authority | regex_replace(':([0-9]+)$', '') }}"
+        edge_forward_port_resolved: "{{ (edge_forward_authority | regex_search(':([0-9]+)$', '\\1') | default([main_logger_port], true) | first) | int }}"
+
     - name: Resolve main reachability target for VPN source detection
       ansible.builtin.set_fact:
         main_reachability_ip: >-
           {{
             (main_internal_ip | default('', true))
             if (main_internal_ip | default('', true) | length > 0)
-            else (
-                backend_reverse_ssh_url
-                | default('', true)
-                | regex_replace('^https?://', '')
-                | regex_replace('/.*', '')
-                | regex_replace(':.*', '')
-            )
+            else backend_reverse_ssh_host
           }}
 
     - name: Detect VPS VPN source IP toward main
@@ -133,8 +139,12 @@
           - main_internal_ip is defined or backend_reverse_ssh_url is defined
           - backend_reverse_ssh_url is defined
           - backend_reverse_ssh_url | length > 0
+          - backend_reverse_ssh_host | length > 0
+          - backend_reverse_ssh_port_resolved | int > 0
           - edge_forward_url is defined
           - edge_forward_url | length > 0
+          - edge_forward_host | length > 0
+          - edge_forward_port_resolved | int > 0
           - edge_forward_token is defined
           - edge_forward_token | length > 20
           - edge_forward_token != 'replace_with_EDGE_FORWARD_TOKEN'
@@ -230,25 +240,25 @@
 
     - name: Check reverse_ssh backend reachability from VPS
       ansible.builtin.wait_for:
-        host: "{{ main_reachability_ip }}"
-        port: "{{ main_reverse_ssh_port }}"
+        host: "{{ backend_reverse_ssh_host }}"
+        port: "{{ backend_reverse_ssh_port_resolved }}"
         timeout: 5
         connect_timeout: 2
       changed_when: false
       when:
-        - main_reachability_ip is defined
-        - main_reachability_ip | length > 0
+        - backend_reverse_ssh_host is defined
+        - backend_reverse_ssh_host | length > 0
 
     - name: Check central logger reachability from VPS
       ansible.builtin.wait_for:
-        host: "{{ main_reachability_ip }}"
-        port: "{{ main_logger_port }}"
+        host: "{{ edge_forward_host }}"
+        port: "{{ edge_forward_port_resolved }}"
         timeout: 5
         connect_timeout: 2
       changed_when: false
       when:
-        - main_reachability_ip is defined
-        - main_reachability_ip | length > 0
+        - edge_forward_host is defined
+        - edge_forward_host | length > 0
 
     - name: Install snapd for Certbot
       ansible.builtin.apt:
@@ -466,7 +476,7 @@
         chdir: "{{ reverse_logger_src_dir }}"
       environment:
         CGO_ENABLED: "0"
-      changed_when: true
+      changed_when: false
 
     - name: Install nginx-edge-forwarder binary
       ansible.builtin.copy:

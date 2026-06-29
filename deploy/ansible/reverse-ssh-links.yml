@@ -4,21 +4,19 @@
   become: false
   gather_facts: false
 
-  vars:
-    rssh_random_paths_enabled: false
-    rssh_random_paths_force: false
-    rssh_random_paths_allow_regenerate: false
-    rssh_random_paths_regenerate: false
-    rssh_random_paths_state_dir: "{{ playbook_dir }}/.generated-paths"
-    rssh_random_path_min_length: 6
-    rssh_random_path_max_length: 15
-    rssh_random_path_chars: ascii_lowercase,digits
-
   tasks:
     - name: Resolve random or configured public paths
       ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
       vars:
         rssh_random_paths_allow_regenerate: false
+        rssh_random_paths_create_state: false
+
+    - name: Store selected VPS edges for link generation
+      ansible.builtin.set_fact:
+        reverse_ssh_selected_edges: "{{ ansible_play_hosts_all | list }}"
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
 
 - name: Generate reverse_ssh links for ready VPS edges
   hosts: main
@@ -50,10 +48,23 @@
     reverse_ssh_link_extra_args: []
 
   pre_tasks:
+    - name: Resolve target VPS edges for link generation
+      ansible.builtin.set_fact:
+        reverse_ssh_target_edges_resolved: >-
+          {{
+            reverse_ssh_target_edges
+            if (
+              reverse_ssh_target_edges is defined
+              and reverse_ssh_target_edges is not string
+              and (reverse_ssh_target_edges | length > 0)
+            )
+            else hostvars.get('localhost', {}).get('reverse_ssh_selected_edges', [])
+          }}
+
     - name: Validate main link generation variables
       ansible.builtin.assert:
         that:
-          - groups['vps_edge'] | default([]) | length > 0
+          - reverse_ssh_target_edges_resolved | length > 0
           - reverse_ssh_console_host | length > 0
           - reverse_ssh_console_port | int > 0
           - reverse_ssh_link_output_dir | length > 1
@@ -61,8 +72,9 @@
           - reverse_ssh_link_platforms | length > 0
           - reverse_ssh_link_name_template | length > 0
         fail_msg: >-
-          Define a [main] inventory group and at least one vps_edge host before
-          running reverse-ssh-links.yml.
+          Define a [main] inventory group and at least one selected vps_edge host
+          before running reverse-ssh-links.yml. When using --limit, include both
+          the target edge host(s) and the main host, or pass reverse_ssh_target_edges.
 
   tasks:
     - name: Check VPS edge readiness before link generation
@@ -90,7 +102,7 @@
         CHECK_TLS_FILES: "{{ (reverse_ssh_link_check_tls_files | bool) | ternary('1', '0') }}"
         TLS_CERT_PATH: "{{ hostvars[item].tls_cert_path | default('/etc/letsencrypt/live/' ~ (hostvars[item].rssh_domain | default('')) ~ '/fullchain.pem') }}"
         TLS_KEY_PATH: "{{ hostvars[item].tls_key_path | default('/etc/letsencrypt/live/' ~ (hostvars[item].rssh_domain | default('')) ~ '/privkey.pem') }}"
-      loop: "{{ groups['vps_edge'] | default([]) }}"
+      loop: "{{ reverse_ssh_target_edges_resolved }}"
       loop_control:
         label: "{{ item }}"
       delegate_to: "{{ item }}"
