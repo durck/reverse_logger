@@ -35,6 +35,7 @@ nginx_edge_acme_enabled: true
 nginx_edge_acme_challenge: http-01
 nginx_edge_acme_webroot: /var/www/letsencrypt
 nginx_edge_acme_dns_multi_credentials_path: /etc/letsencrypt/dns-multi.ini
+nginx_edge_acme_cert_name: "{{ rssh_domain }}"
 nginx_edge_acme_force_renewal: false
 nginx_edge_acme_staging: false
 # With nginx_edge_acme_challenge: http-01, retry through Timeweb DNS-01 when
@@ -45,8 +46,9 @@ nginx_edge_acme_http01_fallback_to_dns_timeweb: true
 # DNS, port 80, or nginx webroot routing is wrong.
 nginx_edge_acme_http01_preflight_enabled: true
 nginx_edge_acme_http01_preflight_timeout: 10
-tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
-tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
+# When ACME is enabled, keep these paths aligned with nginx_edge_acme_cert_name.
+tls_cert_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/fullchain.pem"
+tls_key_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/privkey.pem"
 nginx_edge_create_self_signed_cert: false
 nginx_edge_self_signed_days: 30
 

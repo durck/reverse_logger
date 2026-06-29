@@ -477,6 +477,7 @@ Issue the Let's Encrypt certificate with HTTP-01 webroot validation:
 
 ```sh
 sudo certbot certonly --webroot \
+  --cert-name <rssh_domain> \
   -w /var/www/letsencrypt \
   -d <rssh_domain> \
   --email <admin_email> \
@@ -503,6 +504,7 @@ Then issue the certificate through DNS-01:
 
 ```sh
 sudo certbot certonly \
+  --cert-name <rssh_domain> \
   -a dns-multi \
   --dns-multi-credentials /etc/letsencrypt/dns-multi.ini \
   --preferred-challenges dns \
@@ -525,6 +527,12 @@ temporary file into
 node. A generic URL such as `/test` is expected to return `404` unless that
 exact file exists; the useful signal is whether a created challenge file returns
 `200` with the expected body.
+
+For Ansible-managed ACME, keep nginx `tls_cert_path` and `tls_key_path` aligned
+with the certbot lineage selected by `nginx_edge_acme_cert_name`, normally
+`/etc/letsencrypt/live/<rssh_domain>/fullchain.pem` and
+`/etc/letsencrypt/live/<rssh_domain>/privkey.pem`. Arbitrary custom TLS paths
+are only for non-ACME deployments where those files already exist.
 
 If you are migrating an existing HTTP-01 certificate and need to reissue it
 immediately through DNS-01, replace `--keep-until-expiring` with

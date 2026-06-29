@@ -371,6 +371,19 @@ with:
 ansible-playbook vps-edge.yml --ask-vault-pass
 ```
 
+ACME-managed nginx certificate paths are tied to a certbot lineage name:
+
+```yaml
+nginx_edge_acme_cert_name: "{{ rssh_domain }}"
+tls_cert_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/fullchain.pem"
+tls_key_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/privkey.pem"
+```
+
+When `nginx_edge_acme_enabled: true`, do not point `tls_cert_path` or
+`tls_key_path` at arbitrary files; certbot writes the lineage selected by
+`nginx_edge_acme_cert_name`, and the playbook validates that nginx uses that
+same lineage.
+
 If you are migrating an already-issued HTTP-01 certificate and need to force an
 immediate DNS-01 reissue once, set:
 

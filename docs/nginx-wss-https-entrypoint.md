@@ -239,6 +239,10 @@ ACME prerequisites:
 - The Ansible HTTP-01 flow preflights the challenge webroot from the control
   node before calling certbot, so DNS or port 80 issues are reported before
   another ACME authorization attempt is consumed.
+- Ansible-managed ACME certificates use `nginx_edge_acme_cert_name` as the
+  certbot lineage name. Keep `tls_cert_path` and `tls_key_path` under
+  `/etc/letsencrypt/live/<cert-name>/`; arbitrary custom TLS paths are for
+  non-ACME deployments.
 - PTR is operational hygiene only and is not part of certificate validation.
 - This HTTP-01 flow does not issue wildcard certificates; use DNS-01 for
   wildcard names.

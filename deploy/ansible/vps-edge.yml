@@ -24,6 +24,7 @@
         nginx_edge_acme_email: "{{ nginx_edge_acme_email | default('', true) }}"
         nginx_edge_acme_webroot: "{{ nginx_edge_acme_webroot | default('/var/www/letsencrypt', true) }}"
         nginx_edge_acme_dns_multi_credentials_path: "{{ nginx_edge_acme_dns_multi_credentials_path | default('/etc/letsencrypt/dns-multi.ini', true) }}"
+        nginx_edge_acme_cert_name: "{{ nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true) }}"
         nginx_edge_acme_force_renewal: "{{ nginx_edge_acme_force_renewal | default(false) }}"
         nginx_edge_acme_staging: "{{ nginx_edge_acme_staging | default(false) }}"
         nginx_edge_acme_http01_fallback_to_dns_timeweb: "{{ nginx_edge_acme_http01_fallback_to_dns_timeweb | default(true) }}"
@@ -33,8 +34,8 @@
         nginx_edge_self_signed_days: "{{ nginx_edge_self_signed_days | default(30, true) }}"
         timewebcloud_propagation_timeout: "{{ timewebcloud_propagation_timeout | default(120, true) }}"
         timewebcloud_polling_interval: "{{ timewebcloud_polling_interval | default(5, true) }}"
-        tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (rssh_domain | default('')) ~ '/fullchain.pem', true) }}"
-        tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (rssh_domain | default('')) ~ '/privkey.pem', true) }}"
+        tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/fullchain.pem', true) }}"
+        tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/privkey.pem', true) }}"
         redirect_target: "{{ redirect_target | default('https://example.com', true) }}"
         rssh_ws_path: "{{ rssh_ws_path | default('/ws', true) }}"
         rssh_push_path: "{{ rssh_push_path | default('/push', true) }}"
@@ -131,6 +132,12 @@
         - rssh_domain | length > 0
         - nginx_edge_acme_email is not defined or nginx_edge_acme_email | length == 0
 
+    - name: Derive ACME lineage paths
+      ansible.builtin.set_fact:
+        nginx_edge_acme_expected_cert_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/fullchain.pem"
+        nginx_edge_acme_expected_key_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/privkey.pem"
+      when: nginx_edge_acme_enabled | bool
+
     - name: Validate required variables
       ansible.builtin.assert:
         that:
@@ -174,7 +181,14 @@
           - nginx_edge_acme_email is defined
           - nginx_edge_acme_email | length > 3
           - "'@' in nginx_edge_acme_email"
-        fail_msg: Set nginx_edge_acme_email for ACME certificate issuance.
+          - nginx_edge_acme_cert_name is defined
+          - nginx_edge_acme_cert_name | length > 0
+          - tls_cert_path == nginx_edge_acme_expected_cert_path
+          - tls_key_path == nginx_edge_acme_expected_key_path
+        fail_msg: >-
+          Set nginx_edge_acme_email and keep ACME TLS paths aligned with
+          nginx_edge_acme_cert_name. Certbot manages
+          /etc/letsencrypt/live/<cert-name>/fullchain.pem and privkey.pem.
       when: nginx_edge_acme_enabled | bool
 
     - name: Validate HTTP-01 ACME variables
@@ -518,11 +532,42 @@
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
 
-    - name: Check existing TLS certificate
+    - name: Check existing TLS certificate file
       ansible.builtin.stat:
         path: "{{ tls_cert_path }}"
       register: tls_certificate
-      when: nginx_edge_acme_enabled | bool
+
+    - name: Check existing TLS private key file
+      ansible.builtin.stat:
+        path: "{{ tls_key_path }}"
+      register: tls_private_key
+
+    - name: Record existing TLS material status
+      ansible.builtin.set_fact:
+        tls_material_exists: "{{ (tls_certificate.stat.exists | default(false)) and (tls_private_key.stat.exists | default(false)) }}"
+        tls_material_partial: "{{ (tls_certificate.stat.exists | default(false)) != (tls_private_key.stat.exists | default(false)) }}"
+
+    - name: Stop when TLS material is incomplete
+      ansible.builtin.fail:
+        msg: >-
+          TLS material is incomplete for {{ rssh_domain }}:
+          cert={{ tls_cert_path }} exists={{ tls_certificate.stat.exists | default(false) }},
+          key={{ tls_key_path }} exists={{ tls_private_key.stat.exists | default(false) }}.
+          Restore both files, remove the partial material, or force renewal.
+      when:
+        - tls_material_partial | bool
+        - not (nginx_edge_acme_enabled | bool and nginx_edge_acme_force_renewal | bool)
+
+    - name: Validate external TLS files when ACME is disabled
+      ansible.builtin.assert:
+        that:
+          - tls_material_exists | bool
+        fail_msg: >-
+          nginx_edge_acme_enabled is false, so both tls_cert_path and
+          tls_key_path must already exist before rendering nginx.
+      when:
+        - not (nginx_edge_acme_enabled | bool)
+        - not (nginx_edge_create_self_signed_cert | bool)
 
     - name: Create self-signed TLS directory
       ansible.builtin.file:
@@ -568,7 +613,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
 
     - name: Enable nginx entrypoint site for ACME bootstrap
       ansible.builtin.file:
@@ -579,7 +624,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
 
     - name: Remove default nginx site before ACME bootstrap
       ansible.builtin.file:
@@ -588,7 +633,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
         - nginx_edge_remove_default_site | bool
 
     - name: Validate ACME bootstrap nginx configuration
@@ -597,7 +642,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
 
     - name: Enable and start nginx for ACME bootstrap
       ansible.builtin.systemd:
@@ -607,7 +652,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
 
     - name: Reload nginx for ACME bootstrap
       ansible.builtin.systemd:
@@ -616,7 +661,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - not (tls_certificate.stat.exists | default(false))
+        - not (tls_material_exists | bool)
 
     - name: Render nginx entrypoint configuration before ACME renewal
       ansible.builtin.template:
@@ -627,7 +672,7 @@
         mode: "0644"
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
 
     - name: Enable nginx entrypoint site before ACME renewal
       ansible.builtin.file:
@@ -637,7 +682,7 @@
         force: true
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
 
     - name: Remove default nginx site before ACME renewal
       ansible.builtin.file:
@@ -645,7 +690,7 @@
         state: absent
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
         - nginx_edge_remove_default_site | bool
 
     - name: Validate nginx configuration before ACME renewal
@@ -653,7 +698,7 @@
       changed_when: false
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
 
     - name: Enable and start nginx before ACME renewal
       ansible.builtin.systemd:
@@ -662,7 +707,7 @@
         state: started
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
 
     - name: Reload nginx before ACME renewal
       ansible.builtin.systemd:
@@ -670,7 +715,7 @@
         state: reloaded
       when:
         - nginx_edge_acme_enabled | bool
-        - tls_certificate.stat.exists | default(false)
+        - tls_material_exists | bool
 
     - name: Prepare HTTP-01 preflight values
       ansible.builtin.set_fact:
@@ -747,92 +792,6 @@
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
 
-    - name: Issue or renew ACME certificate with Timeweb DNS-01
-      ansible.builtin.command:
-        argv: >-
-          {{
-            ['certbot', 'certonly']
-            + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
-            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
-            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
-            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
-          }}
-      register: certbot_dns_issue
-      changed_when: "(certbot_dns_issue.stdout + certbot_dns_issue.stderr) is search('Successfully received certificate|Congratulations')"
-      when:
-        - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_challenge == 'dns-timeweb'
-
-    - name: Issue or renew ACME certificate with HTTP-01
-      ansible.builtin.command:
-        argv: >-
-          {{
-            ['certbot', 'certonly']
-            + ['--webroot', '-w', nginx_edge_acme_webroot, '--preferred-challenges', 'http']
-            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
-            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
-            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
-          }}
-      register: certbot_http_issue
-      changed_when: "(certbot_http_issue.stdout + certbot_http_issue.stderr) is search('Successfully received certificate|Congratulations')"
-      failed_when: false
-      when:
-        - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_challenge == 'http-01'
-        - nginx_edge_acme_http01_preflight_ok | default(true) | bool
-
-    - name: Fall back to Timeweb DNS-01 after HTTP-01 preflight or ACME failure
-      ansible.builtin.command:
-        argv: >-
-          {{
-            ['certbot', 'certonly']
-            + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
-            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
-            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
-            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
-          }}
-      register: certbot_dns_fallback_issue
-      changed_when: "(certbot_dns_fallback_issue.stdout + certbot_dns_fallback_issue.stderr) is search('Successfully received certificate|Congratulations')"
-      when:
-        - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_challenge == 'http-01'
-        - >-
-          (
-            certbot_http_issue is defined
-            and certbot_http_issue.rc != 0
-          )
-          or not (nginx_edge_acme_http01_preflight_ok | default(true) | bool)
-        - nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-        - timewebcloud_auth_token is defined
-        - timewebcloud_auth_token | default('', true) | length > 20
-        - timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-
-    - name: Fail when HTTP-01 failed and Timeweb DNS-01 fallback is unavailable
-      ansible.builtin.fail:
-        msg: >-
-          HTTP-01 certificate issuance failed and Timeweb DNS-01 fallback is not
-          available. Either open public 80/tcp for {{ rssh_domain }} or set
-          timewebcloud_auth_token with nginx_edge_acme_http01_fallback_to_dns_timeweb=true.
-          HTTP-01 preflight status={{ nginx_edge_acme_http01_preflight.status | default('not-run') }}
-          url=http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token | default('not-run') }}.
-          HTTP-01 stderr: {{ certbot_http_issue.stderr | default('certbot was not run because HTTP-01 preflight failed') }}
-      when:
-        - nginx_edge_acme_enabled | bool
-        - nginx_edge_acme_challenge == 'http-01'
-        - >-
-          (
-            certbot_http_issue is defined
-            and certbot_http_issue.rc != 0
-          )
-          or not (nginx_edge_acme_http01_preflight_ok | default(true) | bool)
-        - >-
-          not (
-            nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
-
     - name: Create Certbot renewal hook directory
       ansible.builtin.file:
         path: /etc/letsencrypt/renewal-hooks/deploy
@@ -853,6 +812,126 @@
           set -eu
           nginx -t
           systemctl reload nginx
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Issue or renew ACME certificate with Timeweb DNS-01
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['certbot', 'certonly']
+            + ['--cert-name', nginx_edge_acme_cert_name]
+            + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
+            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
+            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
+            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
+          }}
+      register: certbot_dns_issue
+      changed_when: "(certbot_dns_issue.stdout + certbot_dns_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      notify: Reload nginx
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+
+    - name: Issue or renew ACME certificate with HTTP-01
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['certbot', 'certonly']
+            + ['--cert-name', nginx_edge_acme_cert_name]
+            + ['--webroot', '-w', nginx_edge_acme_webroot, '--preferred-challenges', 'http']
+            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
+            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
+            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
+          }}
+      register: certbot_http_issue
+      changed_when: "(certbot_http_issue.stdout + certbot_http_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      failed_when: false
+      notify: Reload nginx
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - nginx_edge_acme_http01_preflight_ok | default(true) | bool
+
+    - name: Record HTTP-01 issuance status
+      ansible.builtin.set_fact:
+        certbot_http_failed: >-
+          {{
+            not (nginx_edge_acme_http01_preflight_ok | default(true) | bool)
+            or (
+              certbot_http_issue is defined
+              and not (certbot_http_issue.skipped | default(false) | bool)
+              and (certbot_http_issue.rc | default(0) | int) != 0
+            )
+          }}
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+
+    - name: Fall back to Timeweb DNS-01 after HTTP-01 preflight or ACME failure
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['certbot', 'certonly']
+            + ['--cert-name', nginx_edge_acme_cert_name]
+            + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
+            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
+            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
+            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
+          }}
+      register: certbot_dns_fallback_issue
+      changed_when: "(certbot_dns_fallback_issue.stdout + certbot_dns_fallback_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      notify: Reload nginx
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - certbot_http_failed | default(false) | bool
+        - nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+        - timewebcloud_auth_token is defined
+        - timewebcloud_auth_token | default('', true) | length > 20
+        - timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+
+    - name: Fail when HTTP-01 failed and Timeweb DNS-01 fallback is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          HTTP-01 certificate issuance failed and Timeweb DNS-01 fallback is not
+          available. Either open public 80/tcp for {{ rssh_domain }} or set
+          timewebcloud_auth_token with nginx_edge_acme_http01_fallback_to_dns_timeweb=true.
+          HTTP-01 preflight status={{ nginx_edge_acme_http01_preflight.status | default('not-run') }}
+          url=http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token | default('not-run') }}.
+          HTTP-01 stderr: {{ certbot_http_issue.stderr | default('certbot was not run because HTTP-01 preflight failed') }}
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - certbot_http_failed | default(false) | bool
+        - >-
+          not (
+            nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
+
+    - name: Check TLS certificate file after ACME issuance
+      ansible.builtin.stat:
+        path: "{{ tls_cert_path }}"
+      register: tls_certificate_after_acme
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Check TLS private key file after ACME issuance
+      ansible.builtin.stat:
+        path: "{{ tls_key_path }}"
+      register: tls_private_key_after_acme
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Validate ACME TLS files after issuance
+      ansible.builtin.assert:
+        that:
+          - tls_certificate_after_acme.stat.exists | default(false)
+          - tls_private_key_after_acme.stat.exists | default(false)
+        fail_msg: >-
+          ACME completed but expected TLS files are missing:
+          cert={{ tls_cert_path }} exists={{ tls_certificate_after_acme.stat.exists | default(false) }},
+          key={{ tls_key_path }} exists={{ tls_private_key_after_acme.stat.exists | default(false) }}.
       when: nginx_edge_acme_enabled | bool
 
     - name: Render nginx-edge-forwarder environment
