@@ -74,13 +74,14 @@ def build_create_command(
     transport: str,
     platform: dict[str, Any],
     options: dict[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     if transport not in SAFE_TRANSPORTS:
         fail(f"unsupported transport {transport!r}; expected one of {sorted(SAFE_TRANSPORTS)}")
 
     domain = require_string(edge.get("domain"), "edge.domain")
     ws_path = require_string(edge.get("ws_path"), "edge.ws_path")
     push_path = require_string(edge.get("push_path"), "edge.push_path")
+    download_path_prefix = optional_string(edge.get("download_path_prefix"), "edge.download_path_prefix", "/dl")
     vps_host = require_string(edge.get("vps_host"), "edge.vps_host")
     vps_name = optional_string(edge.get("vps_name"), "edge.vps_name", vps_host)
     goos = require_string(platform.get("goos"), "platform.goos")
@@ -97,6 +98,10 @@ def build_create_command(
         "vps_name": vps_name,
     }
     name = build_link_name(name_template, context)
+    if not download_path_prefix.startswith("/") or download_path_prefix == "/" or download_path_prefix.endswith("/"):
+        fail(f"edge.download_path_prefix must be an absolute path without a trailing slash: {download_path_prefix!r}")
+    public_port = "" if external_port == 443 else f":{external_port}"
+    download_url = f"https://{domain}{public_port}{download_path_prefix}/{name}"
 
     args = [
         "link",
@@ -126,7 +131,7 @@ def build_create_command(
         fail("options.extra_args must be a list of strings")
     args.extend(extra_args)
 
-    return name, shell_quote_args(args)
+    return name, shell_quote_args(args), download_url
 
 
 def ssh_base_command(console: dict[str, Any]) -> list[str]:
@@ -267,8 +272,8 @@ def main() -> int:
             fail("each edge must be an object")
         for transport in transports:
             for platform in platforms:
-                name, command = build_create_command(edge, transport, platform, options)
-                planned.append({"name": name, "create": command})
+                name, command, download_url = build_create_command(edge, transport, platform, options)
+                planned.append({"name": name, "create": command, "download_url": download_url})
 
     force_rotate = bool(options.get("force_rotate", False))
     timeout = int(console.get("timeout", 60))
@@ -284,8 +289,8 @@ def main() -> int:
 
     commands_to_run: list[str] = []
     skipped_existing: list[str] = []
-    rotated: list[str] = []
-    created: list[str] = []
+    rotated: list[dict[str, str]] = []
+    created: list[dict[str, str]] = []
 
     for item in planned:
         name = item["name"]
@@ -294,9 +299,9 @@ def main() -> int:
             continue
         if name in existing and force_rotate:
             commands_to_run.append(f"link -r {console_quote(name)}")
-            rotated.append(name)
+            rotated.append({"name": name, "download_url": item["download_url"]})
         commands_to_run.append(item["create"])
-        created.append(name)
+        created.append({"name": name, "download_url": item["download_url"]})
 
     transcript = ""
     if args.execute and commands_to_run:
@@ -313,10 +318,14 @@ def main() -> int:
         "commands_file": str(output_dir / "commands.sh"),
         "result_file": str(output_dir / "result.json"),
         "skipped_existing_names": skipped_existing,
-        "rotated_names": rotated if args.execute else [],
-        "would_rotate_names": [] if args.execute else rotated,
-        "created_names": created if args.execute else [],
-        "would_create_names": [] if args.execute else created,
+        "rotated_names": [item["name"] for item in rotated] if args.execute else [],
+        "would_rotate_names": [] if args.execute else [item["name"] for item in rotated],
+        "created_names": [item["name"] for item in created] if args.execute else [],
+        "would_create_names": [] if args.execute else [item["name"] for item in created],
+        "rotated_links": rotated if args.execute else [],
+        "would_rotate_links": [] if args.execute else rotated,
+        "created_links": created if args.execute else [],
+        "would_create_links": [] if args.execute else created,
     }
     if listing:
         result["listing_excerpt"] = listing[-4000:]

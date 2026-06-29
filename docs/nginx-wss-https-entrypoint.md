@@ -159,9 +159,10 @@ link --https --ws-path /rssh-ws --push-path /rssh-push --name main
 
 For Ansible-managed VPS edges, `deploy/ansible/reverse-ssh-links.yml` can do
 this from the main host after the VPS passes readiness checks. It reads
-`rssh_domain`, `rssh_ws_path`, and `rssh_push_path` from inventory/group vars,
-checks `link -l`, skips existing names, and optionally rotates them with
-`link -r <name>`:
+`rssh_domain`, resolved `rssh_ws_path`, resolved `rssh_push_path`, and
+resolved `rssh_download_path_prefix` from inventory/group vars or generated
+path state, checks `link -l`, skips existing names, and optionally rotates them
+with `link -r <name>`:
 
 ```sh
 cd deploy/ansible
@@ -172,6 +173,10 @@ ansible-playbook reverse-ssh-links.yml -e reverse_ssh_link_force_rotate=true
 The generated link command includes `--garble`, `--auto-proxy`, and
 `--use-kerberos` by default. Configure transports, platforms, console host, and
 the name template in `group_vars/main.yml`.
+
+To generate per-host random public paths once and reuse them on later runs, set
+`rssh_random_paths_enabled: true`. Ansible stores the generated paths under
+`deploy/ansible/.generated-paths/`, which is intentionally gitignored.
 
 ### 3. Download and run the generated client on the target machine
 

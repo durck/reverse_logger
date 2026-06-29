@@ -37,7 +37,8 @@ entry3.example.com (...)          ─VPN──┘     reverse_ssh :3232
 ## Four edge groups with different transport paths
 
 Use child groups when each fleet gets its own `link` paths but all edges share one
-main `reverse_ssh` listener:
+main `reverse_ssh` listener. Alternatively, enable per-host random paths in
+`group_vars/vps_edge.yml` and let Ansible persist them locally.
 
 ```text
 edge_group_1 -> /track383211 + /ping198287
@@ -82,8 +83,8 @@ Generate one `link` per group on main with the same paths, either manually:
 link --wss --ws-path /track383211 --push-path /ping198287 --name dl/main-g1 ...
 ```
 
-or with `reverse-ssh-links.yml`, which reads `rssh_domain`, `rssh_ws_path`, and
-`rssh_push_path` from each ready host.
+or with `reverse-ssh-links.yml`, which reads `rssh_domain`, `rssh_ws_path`,
+`rssh_push_path`, and `rssh_download_path_prefix` from each ready host.
 
 After deploy, the playbook prints:
 
@@ -208,6 +209,64 @@ main_push_path: /push
 
 Per-group `rssh_ws_path` / `rssh_push_path` stay in `group_vars/edge_group_N.yml`.
 Per-host `rssh_domain` stays in inventory.
+
+### Per-host random public paths
+
+Enable this when each VPS should get its own persisted random public paths for
+WSS, HTTPS polling, and downloads:
+
+```yaml
+rssh_random_paths_enabled: true
+rssh_random_path_min_length: 6
+rssh_random_path_max_length: 15
+rssh_random_path_chars: ascii_lowercase,digits
+```
+
+On first run, Ansible creates one local state file per host:
+
+```text
+deploy/ansible/.generated-paths/<inventory_hostname>.yml
+```
+
+Example generated state:
+
+```yaml
+rssh_random_ws_path: /k4v9spq
+rssh_random_push_path: /m27xqqn18
+rssh_random_download_path_prefix: /a8f3kz
+```
+
+That directory is gitignored. Keep it with your private deployment state or
+back it up separately; deleting a host file makes Ansible generate new paths on
+the next run.
+
+By default, generated values replace only the legacy defaults `/ws`, `/push`,
+and `/dl`. Explicit non-default values in inventory or group vars are kept. To
+force generated values even when custom paths already exist, set:
+
+```yaml
+rssh_random_paths_force: true
+```
+
+To intentionally rotate paths, set this for one run:
+
+```sh
+ansible-playbook edge-and-links.yml -e rssh_random_paths_regenerate=true
+```
+
+Rotation changes nginx paths and generated client callbacks. Existing clients
+and old links will keep using the old paths, so rotate together with
+`reverse_ssh_link_force_rotate=true` when replacing generated binaries:
+
+```sh
+ansible-playbook edge-and-links.yml \
+  -e rssh_random_paths_regenerate=true \
+  -e reverse_ssh_link_force_rotate=true
+```
+
+`reverse-ssh-links.yml` only reads the persisted state; it does not regenerate
+paths by itself. Regenerate through `vps-edge.yml` or `edge-and-links.yml` so
+nginx, the forwarder env, and generated client links stay aligned.
 
 ### Main link generation vars
 
@@ -401,6 +460,9 @@ Generated artifacts on main:
 /opt/reverse-logger/generated-links/result.json
 ```
 
+`result.json` includes the public download URL for each generated link, using
+the host's resolved `rssh_download_path_prefix`.
+
 ## After deploy
 
 The playbook prints a summary per host and a combined line for main:
@@ -453,6 +515,9 @@ ansible vps_edge -b -m systemd -a 'name=nginx state=reloaded'
 ## Notes
 
 - Custom transport paths must match main `.env`, forwarder `RSSH_*`, and `link --wss`.
+- Per-host generated paths are local deployment state. Preserve
+  `deploy/ansible/.generated-paths/` if you want repeated runs to keep the same
+  public paths.
 - `/dl/` uses `proxy_buffering off` for large client binaries.
 - Mirror capture requires `$rssh_mirror_path` in the nginx template (already rendered).
 - Do not run `certbot --nginx`; the playbook uses `certbot certonly` with the

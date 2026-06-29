@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add optional persisted per-host random WSS, HTTPS polling, and download
+  public paths for Ansible-managed VPS edges.
 - Add Ansible automation for main-side `reverse_ssh link` generation after
   ready VPS edge deployments, including existing-link checks and force rotation.
 - Add Timeweb DNS-01 ACME support to Ansible and manual VPS deployment docs.

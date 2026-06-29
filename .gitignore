@@ -16,4 +16,5 @@ deploy/ansible/group_vars/edge_group_1.yml
 deploy/ansible/group_vars/edge_group_2.yml
 deploy/ansible/group_vars/edge_group_3.yml
 deploy/ansible/group_vars/edge_group_4.yml
+deploy/ansible/.generated-paths/
 *.retry

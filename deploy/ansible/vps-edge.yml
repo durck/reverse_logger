@@ -35,10 +35,21 @@
     rssh_ws_path: /ws
     rssh_push_path: /push
     rssh_download_path_prefix: /dl
+    rssh_random_paths_enabled: false
+    rssh_random_paths_force: false
+    rssh_random_paths_allow_regenerate: true
+    rssh_random_paths_regenerate: false
+    rssh_random_paths_state_dir: "{{ playbook_dir }}/.generated-paths"
+    rssh_random_path_min_length: 6
+    rssh_random_path_max_length: 15
+    rssh_random_path_chars: ascii_lowercase,digits
     main_reverse_ssh_port: 3232
     main_logger_port: 8080
 
   pre_tasks:
+    - name: Resolve random or configured public paths
+      ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
+
     - name: Derive backend_reverse_ssh_url from main_internal_ip
       ansible.builtin.set_fact:
         backend_reverse_ssh_url: "https://{{ main_internal_ip }}:{{ main_reverse_ssh_port }}"
@@ -710,6 +721,9 @@
           - "domain={{ rssh_domain }}"
           - "public_ip={{ vps_public_ip }}"
           - "vpn_ip={{ vps_internal_ip | default('not detected; central logger will use forwarder_ip fallback', true) }}"
+          - "ws_path={{ rssh_ws_path }}"
+          - "push_path={{ rssh_push_path }}"
+          - "download_path_prefix={{ rssh_download_path_prefix }}"
           - "trusted_proxy_cidr={{ ((vps_internal_ip | default('', true) | length) > 0) | ternary((vps_internal_ip | default('', true)) ~ '/32', 'not available') }}"
 
     - name: Build trusted proxy CIDR list for main server

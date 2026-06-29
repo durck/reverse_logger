@@ -758,6 +758,18 @@ successfully, `nginx` and `nginx-edge-forwarder` must be active, the forwarder
 env file must contain the expected `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, and TLS
 files must exist unless `reverse_ssh_link_check_tls_files=false`.
 
+For per-host random public paths, set `rssh_random_paths_enabled: true` in
+`group_vars/vps_edge.yml`. The first run persists generated `/ws`, `/push`, and
+download-prefix replacements in:
+
+```text
+deploy/ansible/.generated-paths/<inventory_hostname>.yml
+```
+
+Keep that directory private and backed up if you need repeatable redeploys.
+Deleting a host file or running with `rssh_random_paths_regenerate=true`
+generates new paths and requires new client links.
+
 ### 12.1 Connect to the catcher console
 
 From the main server, load `.env` and connect:

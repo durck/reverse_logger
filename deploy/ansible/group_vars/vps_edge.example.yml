@@ -16,6 +16,20 @@ edge_forward_token: replace_with_EDGE_FORWARD_TOKEN
 
 rssh_download_path_prefix: /dl
 
+# Optional: generate per-host public paths once and persist them locally in
+# deploy/ansible/.generated-paths/<inventory_hostname>.yml.
+# When enabled, default /ws, /push, and /dl values are replaced with random
+# 6-15 character paths. Non-default explicit host/group values are kept unless
+# rssh_random_paths_force is true.
+rssh_random_paths_enabled: false
+rssh_random_paths_force: false
+rssh_random_paths_allow_regenerate: true
+rssh_random_paths_regenerate: false
+rssh_random_paths_state_dir: "{{ playbook_dir }}/.generated-paths"
+rssh_random_path_min_length: 6
+rssh_random_path_max_length: 15
+rssh_random_path_chars: ascii_lowercase,digits
+
 nginx_edge_acme_email: ""
 nginx_edge_acme_enabled: true
 nginx_edge_acme_challenge: http-01

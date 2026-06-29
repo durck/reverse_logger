@@ -1,4 +1,25 @@
 ---
+- name: Resolve VPS edge public paths for link generation
+  hosts: vps_edge
+  become: false
+  gather_facts: false
+
+  vars:
+    rssh_random_paths_enabled: false
+    rssh_random_paths_force: false
+    rssh_random_paths_allow_regenerate: false
+    rssh_random_paths_regenerate: false
+    rssh_random_paths_state_dir: "{{ playbook_dir }}/.generated-paths"
+    rssh_random_path_min_length: 6
+    rssh_random_path_max_length: 15
+    rssh_random_path_chars: ascii_lowercase,digits
+
+  tasks:
+    - name: Resolve random or configured public paths
+      ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
+      vars:
+        rssh_random_paths_allow_regenerate: false
+
 - name: Generate reverse_ssh links for ready VPS edges
   hosts: main
   become: true
