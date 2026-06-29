@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add an Ansible HTTP-01 preflight check before certbot to avoid burning ACME
+  authorization attempts when DNS, port 80, or nginx webroot routing is wrong.
 - Fix Ansible play defaults overriding `group_vars/vps_edge.yml` edge settings.
 - Fix play-level Timeweb token default overriding vaulted group vars.
 - Fix Timeweb DNS-01 ACME fallback availability checks for vaulted tokens.

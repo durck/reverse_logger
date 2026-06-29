@@ -40,6 +40,11 @@ nginx_edge_acme_staging: false
 # With nginx_edge_acme_challenge: http-01, retry through Timeweb DNS-01 when
 # HTTP-01 fails and timewebcloud_auth_token is configured.
 nginx_edge_acme_http01_fallback_to_dns_timeweb: true
+# Before calling certbot for HTTP-01, create a real challenge file and fetch it
+# from the control node. This avoids burning ACME authorization attempts when
+# DNS, port 80, or nginx webroot routing is wrong.
+nginx_edge_acme_http01_preflight_enabled: true
+nginx_edge_acme_http01_preflight_timeout: 10
 tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
 tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
 nginx_edge_create_self_signed_cert: false

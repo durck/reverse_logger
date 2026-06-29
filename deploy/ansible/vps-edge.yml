@@ -27,6 +27,8 @@
         nginx_edge_acme_force_renewal: "{{ nginx_edge_acme_force_renewal | default(false) }}"
         nginx_edge_acme_staging: "{{ nginx_edge_acme_staging | default(false) }}"
         nginx_edge_acme_http01_fallback_to_dns_timeweb: "{{ nginx_edge_acme_http01_fallback_to_dns_timeweb | default(true) }}"
+        nginx_edge_acme_http01_preflight_enabled: "{{ nginx_edge_acme_http01_preflight_enabled | default(true) }}"
+        nginx_edge_acme_http01_preflight_timeout: "{{ nginx_edge_acme_http01_preflight_timeout | default(10, true) }}"
         nginx_edge_create_self_signed_cert: "{{ nginx_edge_create_self_signed_cert | default(false) }}"
         nginx_edge_self_signed_days: "{{ nginx_edge_self_signed_days | default(30, true) }}"
         timewebcloud_propagation_timeout: "{{ timewebcloud_propagation_timeout | default(120, true) }}"
@@ -660,6 +662,81 @@
         - nginx_edge_acme_enabled | bool
         - tls_certificate.stat.exists | default(false)
 
+    - name: Prepare HTTP-01 preflight values
+      ansible.builtin.set_fact:
+        nginx_edge_acme_http01_preflight_token: "ansible-http01-preflight-{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '-') }}"
+        nginx_edge_acme_http01_preflight_content: "ok-{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '-') }}"
+        nginx_edge_acme_http01_preflight_ok: true
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+
+    - name: Create HTTP-01 preflight challenge directory
+      ansible.builtin.file:
+        path: "{{ nginx_edge_acme_webroot }}/.well-known/acme-challenge"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - nginx_edge_acme_http01_preflight_enabled | bool
+
+    - name: Write HTTP-01 preflight challenge file
+      ansible.builtin.copy:
+        dest: "{{ nginx_edge_acme_webroot }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ nginx_edge_acme_http01_preflight_content }}\n"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - nginx_edge_acme_http01_preflight_enabled | bool
+
+    - name: Check HTTP-01 preflight challenge from control node
+      ansible.builtin.uri:
+        url: "http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: "{{ nginx_edge_acme_http01_preflight_timeout | int }}"
+      delegate_to: localhost
+      become: false
+      register: nginx_edge_acme_http01_preflight
+      changed_when: false
+      failed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+        - nginx_edge_acme_http01_preflight_enabled | bool
+
+    - name: Record HTTP-01 preflight result
+      ansible.builtin.set_fact:
+        nginx_edge_acme_http01_preflight_ok: >-
+          {{
+            (not (nginx_edge_acme_http01_preflight_enabled | bool))
+            or (
+              nginx_edge_acme_http01_preflight is defined
+              and (nginx_edge_acme_http01_preflight.status | default(0) | int) == 200
+              and (nginx_edge_acme_http01_preflight.content | default('') | trim) == nginx_edge_acme_http01_preflight_content
+            )
+          }}
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+
+    - name: Show HTTP-01 preflight result
+      ansible.builtin.debug:
+        msg:
+          - "http01_preflight_ok={{ nginx_edge_acme_http01_preflight_ok | default(true) | bool }}"
+          - "http01_preflight_url=http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token | default('not-run') }}"
+          - "http01_preflight_status={{ nginx_edge_acme_http01_preflight.status | default('not-run') }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+
     - name: Issue or renew ACME certificate with Timeweb DNS-01
       ansible.builtin.command:
         argv: >-
@@ -692,8 +769,9 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
+        - nginx_edge_acme_http01_preflight_ok | default(true) | bool
 
-    - name: Fall back to Timeweb DNS-01 after HTTP-01 ACME failure
+    - name: Fall back to Timeweb DNS-01 after HTTP-01 preflight or ACME failure
       ansible.builtin.command:
         argv: >-
           {{
@@ -708,8 +786,12 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - certbot_http_issue is defined
-        - certbot_http_issue.rc != 0
+        - >-
+          (
+            certbot_http_issue is defined
+            and certbot_http_issue.rc != 0
+          )
+          or not (nginx_edge_acme_http01_preflight_ok | default(true) | bool)
         - nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
         - timewebcloud_auth_token is defined
         - timewebcloud_auth_token | default('', true) | length > 20
@@ -721,12 +803,18 @@
           HTTP-01 certificate issuance failed and Timeweb DNS-01 fallback is not
           available. Either open public 80/tcp for {{ rssh_domain }} or set
           timewebcloud_auth_token with nginx_edge_acme_http01_fallback_to_dns_timeweb=true.
-          HTTP-01 stderr: {{ certbot_http_issue.stderr | default('') }}
+          HTTP-01 preflight status={{ nginx_edge_acme_http01_preflight.status | default('not-run') }}
+          url=http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token | default('not-run') }}.
+          HTTP-01 stderr: {{ certbot_http_issue.stderr | default('certbot was not run because HTTP-01 preflight failed') }}
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
-        - certbot_http_issue is defined
-        - certbot_http_issue.rc != 0
+        - >-
+          (
+            certbot_http_issue is defined
+            and certbot_http_issue.rc != 0
+          )
+          or not (nginx_edge_acme_http01_preflight_ok | default(true) | bool)
         - >-
           not (
             nginx_edge_acme_http01_fallback_to_dns_timeweb | bool

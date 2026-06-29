@@ -518,6 +518,14 @@ and still provide `timewebcloud_auth_token`. When HTTP-01 times out or fails,
 the playbook automatically retries with Timeweb DNS-01 if
 `nginx_edge_acme_http01_fallback_to_dns_timeweb: true`.
 
+The Ansible HTTP-01 path also performs a preflight before certbot: it writes a
+temporary file into
+`/var/www/letsencrypt/.well-known/acme-challenge/` and fetches it through
+`http://<rssh_domain>/.well-known/acme-challenge/<token>` from the control
+node. A generic URL such as `/test` is expected to return `404` unless that
+exact file exists; the useful signal is whether a created challenge file returns
+`200` with the expected body.
+
 If you are migrating an existing HTTP-01 certificate and need to reissue it
 immediately through DNS-01, replace `--keep-until-expiring` with
 `--force-renewal` for that one run. Keep the Timeweb token out of shell history

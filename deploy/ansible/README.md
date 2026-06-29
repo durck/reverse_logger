@@ -327,6 +327,18 @@ not used. If it fails and the token is valid, the playbook re-runs certbot with
 fails with the original HTTP-01 stderr and a message explaining how to enable
 fallback.
 
+Before it calls certbot for HTTP-01, the playbook creates a real preflight file
+under `{{ nginx_edge_acme_webroot }}/.well-known/acme-challenge/` and fetches it
+from the control node through `http://{{ rssh_domain }}/...`. If this check
+does not return the expected body, certbot HTTP-01 is skipped and the playbook
+either falls back to Timeweb DNS-01 or fails without consuming another Let's
+Encrypt authorization attempt.
+
+```yaml
+nginx_edge_acme_http01_preflight_enabled: true
+nginx_edge_acme_http01_preflight_timeout: 10
+```
+
 For Timeweb DNS-01, switch the challenge mode and provide a Timeweb Cloud API
 token that can edit DNS records for the domain zone:
 
