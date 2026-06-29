@@ -27,7 +27,6 @@
     nginx_edge_acme_http01_fallback_to_dns_timeweb: true
     nginx_edge_create_self_signed_cert: false
     nginx_edge_self_signed_days: 30
-    timewebcloud_auth_token: ""
     timewebcloud_propagation_timeout: 120
     timewebcloud_polling_interval: 5
     tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
@@ -187,8 +186,8 @@
       ansible.builtin.assert:
         that:
           - timewebcloud_auth_token is defined
-          - timewebcloud_auth_token | length > 20
-          - timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          - timewebcloud_auth_token | default('', true) | length > 20
+          - timewebcloud_auth_token | default('', true) != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
           - nginx_edge_acme_dns_multi_credentials_path is defined
           - nginx_edge_acme_dns_multi_credentials_path | length > 1
         fail_msg: Set timewebcloud_auth_token for Timeweb DNS-01 issuance.

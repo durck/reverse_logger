@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fix play-level Timeweb token default overriding vaulted group vars.
 - Fix Timeweb DNS-01 ACME fallback availability checks for vaulted tokens.
 - Add automatic Ansible HTTP-01 to Timeweb DNS-01 ACME fallback when HTTP
   certificate issuance fails and a Timeweb token is configured.
