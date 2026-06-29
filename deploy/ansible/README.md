@@ -11,7 +11,8 @@ Repository references:
 The playbook owns the VPS edge layer only:
 
 - installs nginx, Go, git, Snap Certbot, and runtime dependencies;
-- issues a free Let's Encrypt certificate with HTTP-01 webroot validation;
+- issues a free Let's Encrypt certificate with HTTP-01 webroot validation or
+  Timeweb DNS-01 validation;
 - clones `reverse_logger`;
 - builds and installs `cmd/nginx-edge-forwarder`;
 - creates state directories;
@@ -110,7 +111,8 @@ On **each VPS**:
    If it does not, deployment still works, but trusted proxy CIDR output is skipped
    and central event correlation falls back to observed `forwarder_ip`.
 4. DNS `A` record: `<rssh_domain>` → public IP of this VPS.
-5. Inbound `80/tcp` and `443/tcp` open.
+5. Inbound `443/tcp` open. Inbound `80/tcp` is required only for the default
+   HTTP-01 ACME challenge.
 
 On **main** (`/opt/reverse-logger`):
 
@@ -186,6 +188,53 @@ main_push_path: /push
 
 Per-group `rssh_ws_path` / `rssh_push_path` stay in `group_vars/edge_group_N.yml`.
 Per-host `rssh_domain` stays in inventory.
+
+### Timeweb DNS-01 certificates
+
+Default certificate issuance uses HTTP-01:
+
+```yaml
+nginx_edge_acme_challenge: http-01
+```
+
+For Timeweb DNS-01, switch the challenge mode and provide a Timeweb Cloud API
+token that can edit DNS records for the domain zone:
+
+```yaml
+nginx_edge_acme_challenge: dns-timeweb
+timewebcloud_auth_token: <Timeweb Cloud API token>
+timewebcloud_propagation_timeout: 120
+timewebcloud_polling_interval: 5
+```
+
+The playbook installs `certbot-dns-multi`, writes credentials to
+`/etc/letsencrypt/dns-multi.ini` with mode `0600`, and runs certbot with the
+`dns-multi` authenticator. In this mode the CA validates
+`_acme-challenge.<domain>` in DNS, so the VPS does not need inbound `80/tcp`
+for certificate issuance.
+
+Do not commit the Timeweb token. `group_vars/vps_edge.yml` is gitignored, but
+`ansible-vault` is still preferred:
+
+```sh
+ansible-vault encrypt_string '<Timeweb Cloud API token>' --name timewebcloud_auth_token
+```
+
+Paste the encrypted variable into `group_vars/vps_edge.yml` and run playbooks
+with:
+
+```sh
+ansible-playbook vps-edge.yml --ask-vault-pass
+```
+
+If you are migrating an already-issued HTTP-01 certificate and need to force an
+immediate DNS-01 reissue once, set:
+
+```yaml
+nginx_edge_acme_force_renewal: true
+```
+
+Set it back to `false` after the migration.
 
 ### Auto-derived per VPS
 
@@ -284,4 +333,5 @@ ansible vps_edge -b -m systemd -a 'name=nginx state=reloaded'
 - Custom transport paths must match main `.env`, forwarder `RSSH_*`, and `link --wss`.
 - `/dl/` uses `proxy_buffering off` for large client binaries.
 - Mirror capture requires `$rssh_mirror_path` in the nginx template (already rendered).
-- Do not run `certbot --nginx`; the playbook uses `certbot certonly --webroot`.
+- Do not run `certbot --nginx`; the playbook uses `certbot certonly` with the
+  configured ACME challenge.

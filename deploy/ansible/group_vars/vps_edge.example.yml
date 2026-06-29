@@ -18,12 +18,21 @@ rssh_download_path_prefix: /dl
 
 nginx_edge_acme_email: ""
 nginx_edge_acme_enabled: true
+nginx_edge_acme_challenge: http-01
 nginx_edge_acme_webroot: /var/www/letsencrypt
+nginx_edge_acme_dns_multi_credentials_path: /etc/letsencrypt/dns-multi.ini
+nginx_edge_acme_force_renewal: false
 nginx_edge_acme_staging: false
 tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
 tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
 nginx_edge_create_self_signed_cert: false
 nginx_edge_self_signed_days: 30
+
+# Enable these for Timeweb DNS-01 instead of HTTP-01:
+# nginx_edge_acme_challenge: dns-timeweb
+# timewebcloud_auth_token: replace_with_TIMEWEBCLOUD_AUTH_TOKEN
+# timewebcloud_propagation_timeout: 120
+# timewebcloud_polling_interval: 5
 
 nginx_edge_listen_addr: 127.0.0.1:18080
 nginx_edge_capture_mode: mirror

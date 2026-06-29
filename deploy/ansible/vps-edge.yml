@@ -18,11 +18,17 @@
     nginx_edge_sites_enabled_dir: /etc/nginx/sites-enabled
     nginx_edge_remove_default_site: true
     nginx_edge_acme_enabled: true
+    nginx_edge_acme_challenge: http-01
     nginx_edge_acme_email: ""
     nginx_edge_acme_webroot: /var/www/letsencrypt
+    nginx_edge_acme_dns_multi_credentials_path: /etc/letsencrypt/dns-multi.ini
+    nginx_edge_acme_force_renewal: false
     nginx_edge_acme_staging: false
     nginx_edge_create_self_signed_cert: false
     nginx_edge_self_signed_days: 30
+    timewebcloud_auth_token: ""
+    timewebcloud_propagation_timeout: 120
+    timewebcloud_polling_interval: 5
     tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
     tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
     redirect_target: https://example.com
@@ -130,6 +136,7 @@
           - rssh_download_path_prefix is match('^/.+')
           - rssh_download_path_prefix != '/'
           - rssh_download_path_prefix[-1] != '/'
+          - nginx_edge_acme_challenge in ['http-01', 'dns-timeweb']
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: >-
           Fill deploy/ansible/group_vars/vps_edge.yml and per-host rssh_domain in
@@ -143,10 +150,32 @@
           - nginx_edge_acme_email is defined
           - nginx_edge_acme_email | length > 3
           - "'@' in nginx_edge_acme_email"
+        fail_msg: Set nginx_edge_acme_email for ACME certificate issuance.
+      when: nginx_edge_acme_enabled | bool
+
+    - name: Validate HTTP-01 ACME variables
+      ansible.builtin.assert:
+        that:
           - nginx_edge_acme_webroot is defined
           - nginx_edge_acme_webroot | length > 1
-        fail_msg: Set nginx_edge_acme_email and nginx_edge_acme_webroot for Let's Encrypt HTTP-01 issuance.
-      when: nginx_edge_acme_enabled | bool
+        fail_msg: Set nginx_edge_acme_webroot for HTTP-01 issuance.
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
+
+    - name: Validate Timeweb DNS-01 ACME variables
+      ansible.builtin.assert:
+        that:
+          - timewebcloud_auth_token is defined
+          - timewebcloud_auth_token | length > 20
+          - timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          - nginx_edge_acme_dns_multi_credentials_path is defined
+          - nginx_edge_acme_dns_multi_credentials_path | length > 1
+        fail_msg: Set timewebcloud_auth_token for Timeweb DNS-01 issuance.
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+      no_log: true
 
     - name: Validate production certificate paths
       ansible.builtin.assert:
@@ -258,6 +287,51 @@
         - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
       when: nginx_edge_acme_enabled | bool
 
+    - name: Install certbot-dns-multi snap
+      ansible.builtin.command:
+        argv:
+          - snap
+          - install
+          - certbot-dns-multi
+      register: certbot_dns_multi_install
+      changed_when:
+        - "'installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+        - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+      failed_when:
+        - certbot_dns_multi_install.rc != 0
+        - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+
+    - name: Trust Certbot snap plugins with root
+      ansible.builtin.command:
+        argv:
+          - snap
+          - set
+          - certbot
+          - trust-plugin-with-root=ok
+      changed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+
+    - name: Connect certbot-dns-multi plugin
+      ansible.builtin.command:
+        argv:
+          - snap
+          - connect
+          - certbot:plugin
+          - certbot-dns-multi
+      register: certbot_dns_multi_connect
+      changed_when: false
+      failed_when:
+        - certbot_dns_multi_connect.rc != 0
+        - "'already connected' not in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+
     - name: Link Certbot into /usr/bin
       ansible.builtin.file:
         src: /snap/bin/certbot
@@ -265,6 +339,33 @@
         state: link
         force: true
       when: nginx_edge_acme_enabled | bool
+
+    - name: Create Let's Encrypt configuration directory
+      ansible.builtin.file:
+        path: "{{ nginx_edge_acme_dns_multi_credentials_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
+
+    - name: Render Timeweb DNS-01 credentials
+      ansible.builtin.copy:
+        dest: "{{ nginx_edge_acme_dns_multi_credentials_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          dns_multi_provider = timewebcloud
+          TIMEWEBCLOUD_AUTH_TOKEN = "{{ timewebcloud_auth_token }}"
+          TIMEWEBCLOUD_PROPAGATION_TIMEOUT = {{ timewebcloud_propagation_timeout }}
+          TIMEWEBCLOUD_POLLING_INTERVAL = {{ timewebcloud_polling_interval }}
+      no_log: true
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'dns-timeweb'
 
   tasks:
     - name: Create repository parent directory
@@ -335,6 +436,9 @@
         owner: root
         group: root
         mode: "0755"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
 
     - name: Check existing TLS certificate
       ansible.builtin.stat:
@@ -385,6 +489,7 @@
         mode: "0644"
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
 
     - name: Enable nginx entrypoint site for ACME bootstrap
@@ -395,6 +500,7 @@
         force: true
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
 
     - name: Remove default nginx site before ACME bootstrap
@@ -403,6 +509,7 @@
         state: absent
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
         - nginx_edge_remove_default_site | bool
 
@@ -411,6 +518,7 @@
       changed_when: false
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
 
     - name: Enable and start nginx for ACME bootstrap
@@ -420,6 +528,7 @@
         state: started
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
 
     - name: Reload nginx for ACME bootstrap
@@ -428,6 +537,7 @@
         state: reloaded
       when:
         - nginx_edge_acme_enabled | bool
+        - nginx_edge_acme_challenge == 'http-01'
         - not (tls_certificate.stat.exists | default(false))
 
     - name: Render nginx entrypoint configuration before ACME renewal
@@ -484,9 +594,22 @@
         - nginx_edge_acme_enabled | bool
         - tls_certificate.stat.exists | default(false)
 
-    - name: Issue or renew Let's Encrypt certificate
+    - name: Issue or renew ACME certificate
       ansible.builtin.command:
-        argv: "{{ ['certbot', 'certonly', '--webroot', '-w', nginx_edge_acme_webroot, '-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive', '--keep-until-expiring'] + (nginx_edge_acme_staging | bool | ternary(['--staging'], [])) }}"
+        argv: >-
+          {{
+            ['certbot', 'certonly']
+            + (
+                (nginx_edge_acme_challenge == 'dns-timeweb')
+                | ternary(
+                    ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns'],
+                    ['--webroot', '-w', nginx_edge_acme_webroot, '--preferred-challenges', 'http']
+                  )
+              )
+            + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
+            + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
+            + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
+          }}
       register: certbot_issue
       changed_when: "(certbot_issue.stdout + certbot_issue.stderr) is search('Successfully received certificate|Congratulations')"
       when: nginx_edge_acme_enabled | bool
