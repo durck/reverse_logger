@@ -196,22 +196,24 @@ ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/vps-edge.yml
 
 The playbook installs nginx, clones `reverse_logger`, builds
 `nginx-edge-forwarder`, issues a free Let's Encrypt certificate through
-HTTP-01 webroot validation, renders nginx from the same WSS/HTTPS semantics as
-this document, and enables both services. It intentionally does not create DNS,
-PTR records, cloud firewall rules, SoftEther accounts, or the main
-`reverse_ssh` listener. See [../deploy/ansible/README.md](../deploy/ansible/README.md)
-for the variable list, staging mode, and self-signed smoke mode.
+HTTP-01 webroot validation or Timeweb DNS-01 validation, renders nginx from
+the same WSS/HTTPS semantics as this document, and enables both services. It
+intentionally does not create DNS, PTR records, cloud firewall rules,
+SoftEther accounts, or the main `reverse_ssh` listener. See
+[../deploy/ansible/README.md](../deploy/ansible/README.md) for the variable
+list, staging mode, DNS-01 mode, and self-signed smoke mode.
 
 ACME prerequisites:
 
 - `rssh_domain` must already have an A record pointing at the VPS public IP.
-- Public `80/tcp` must be reachable for HTTP-01 validation; `443/tcp` remains
-  the WSS/HTTPS transport entrypoint.
+- Public `80/tcp` must be reachable for HTTP-01 validation; Timeweb DNS-01
+  uses DNS TXT validation instead. `443/tcp` remains the WSS/HTTPS transport
+  entrypoint.
 - PTR is operational hygiene only and is not part of certificate validation.
 - This HTTP-01 flow does not issue wildcard certificates; use DNS-01 for
   wildcard names.
 - Do not run `certbot --nginx`; this repository keeps nginx configuration
-  owned by Ansible and uses `certbot certonly --webroot`.
+  owned by Ansible and uses `certbot certonly`.
 
 ## VPS Nginx
 
@@ -236,8 +238,8 @@ Edit:
   `link --name <filename>` maps to public `/dl/<filename>`
 - `proxy_buffering off` on `/dl/` so large chunked binaries stream end-to-end
 
-For first manual Let's Encrypt issuance, use the temporary HTTP-only bootstrap
-template before enabling the final `443 ssl` config:
+For first manual Let's Encrypt issuance with HTTP-01, use the temporary
+HTTP-only bootstrap template before enabling the final `443 ssl` config:
 
 ```sh
 sudo mkdir -p /var/www/letsencrypt
@@ -258,6 +260,34 @@ sudo certbot certonly --webroot \
   --agree-tos \
   --non-interactive \
   --keep-until-expiring
+```
+
+For Timeweb DNS-01, skip the HTTP bootstrap and issue with the DNS plugin:
+
+```sh
+sudo snap install certbot-dns-multi
+sudo snap set certbot trust-plugin-with-root=ok
+sudo snap connect certbot:plugin certbot-dns-multi
+sudo install -m 0600 /dev/null /etc/letsencrypt/dns-multi.ini
+sudo editor /etc/letsencrypt/dns-multi.ini
+sudo certbot certonly \
+  -a dns-multi \
+  --dns-multi-credentials /etc/letsencrypt/dns-multi.ini \
+  --preferred-challenges dns \
+  -d secret-entry.example.com \
+  --email admin@example.com \
+  --agree-tos \
+  --non-interactive \
+  --keep-until-expiring
+```
+
+Use this credentials format:
+
+```ini
+dns_multi_provider = timewebcloud
+TIMEWEBCLOUD_AUTH_TOKEN = "<Timeweb Cloud API token>"
+TIMEWEBCLOUD_PROPAGATION_TIMEOUT = 120
+TIMEWEBCLOUD_POLLING_INTERVAL = 5
 ```
 
 After the certificate exists, replace the bootstrap config with

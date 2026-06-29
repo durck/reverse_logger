@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add Timeweb DNS-01 ACME support to Ansible and manual VPS deployment docs.
 - Harden ingress/webhook correlation with observed `forwarder_ip`, dual timestamp matching, configurable windows, fallback methods, and diagnostics.
 - Fix nginx mirror capture to preserve original transport paths for edge forwarder spooling.
 - Add public `/dl/` nginx download proxy (plain HTTP to backend) with prefix stripping.

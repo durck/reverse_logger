@@ -393,6 +393,15 @@ sudo snap install --classic certbot
 sudo ln -sf /snap/bin/certbot /usr/bin/certbot
 ```
 
+If you plan to issue certificates with Timeweb DNS-01 instead of HTTP-01,
+install the DNS plugin as well:
+
+```sh
+sudo snap install certbot-dns-multi
+sudo snap set certbot trust-plugin-with-root=ok
+sudo snap connect certbot:plugin certbot-dns-multi
+```
+
 Clone this repository on the VPS:
 
 ```sh
@@ -443,7 +452,8 @@ The unit also declares `StateDirectory=` for the same paths, so a fresh
 `mkdir` step was skipped. Without either step, startup fails with
 `226/NAMESPACE` because `ReadWritePaths` requires an existing directory.
 
-Create the ACME webroot and apply the temporary HTTP-only nginx config:
+For HTTP-01 only, create the ACME webroot and apply the temporary HTTP-only
+nginx config:
 
 ```sh
 sudo mkdir -p /var/www/letsencrypt
@@ -474,6 +484,39 @@ sudo certbot certonly --webroot \
   --non-interactive \
   --keep-until-expiring
 ```
+
+For Timeweb DNS-01, skip the HTTP bootstrap config and create the DNS plugin
+credentials file instead:
+
+```sh
+sudo install -m 0600 /dev/null /etc/letsencrypt/dns-multi.ini
+sudo tee /etc/letsencrypt/dns-multi.ini >/dev/null <<'EOF'
+dns_multi_provider = timewebcloud
+TIMEWEBCLOUD_AUTH_TOKEN = "<Timeweb Cloud API token>"
+TIMEWEBCLOUD_PROPAGATION_TIMEOUT = 120
+TIMEWEBCLOUD_POLLING_INTERVAL = 5
+EOF
+sudo chmod 0600 /etc/letsencrypt/dns-multi.ini
+```
+
+Then issue the certificate through DNS-01:
+
+```sh
+sudo certbot certonly \
+  -a dns-multi \
+  --dns-multi-credentials /etc/letsencrypt/dns-multi.ini \
+  --preferred-challenges dns \
+  -d <rssh_domain> \
+  --email <admin_email> \
+  --agree-tos \
+  --non-interactive \
+  --keep-until-expiring
+```
+
+If you are migrating an existing HTTP-01 certificate and need to reissue it
+immediately through DNS-01, replace `--keep-until-expiring` with
+`--force-renewal` for that one run. Keep the Timeweb token out of shell history
+and do not commit `/etc/letsencrypt/dns-multi.ini` or copied credentials.
 
 Install a renewal hook so nginx reloads after certificate renewal:
 
@@ -535,11 +578,12 @@ The first command should redirect to `redirect_target`. The second should reach
 `reverse_ssh` and return a fake nginx 404 for an unknown download name.
 
 This manual flow requires an existing A record pointing `rssh_domain` at the
-VPS, open `80/tcp` and `443/tcp`, SoftEther/internal reachability to the main
-`reverse_ssh` listener, and an email for Let's Encrypt. PTR is useful for
+VPS, open `443/tcp`, SoftEther/internal reachability to the main `reverse_ssh`
+listener, and an email for Let's Encrypt. HTTP-01 also requires open `80/tcp`.
+Timeweb DNS-01 requires DNS hosting on Timeweb-compatible nameservers plus a
+Timeweb Cloud API token that can edit records for the zone. PTR is useful for
 operations hygiene but is not used for ACME validation. Wildcard certificates
-are not supported by this HTTP-01 flow; use DNS-01 if wildcard certificates
-are required.
+require DNS-01.
 
 Keep these values identical across the stack:
 
