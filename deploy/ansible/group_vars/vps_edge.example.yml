@@ -3,6 +3,8 @@
 
 redirect_target: https://example.com
 
+reverse_logger_repo_update: true
+
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232
 main_logger_port: 8080
@@ -55,8 +57,10 @@ nginx_edge_self_signed_days: 30
 # Enable these for Timeweb DNS-01 instead of HTTP-01:
 # nginx_edge_acme_challenge: dns-timeweb
 # timewebcloud_auth_token: replace_with_TIMEWEBCLOUD_AUTH_TOKEN
-# timewebcloud_propagation_timeout: 120
+# timewebcloud_propagation_timeout: 300
 # timewebcloud_polling_interval: 5
+# nginx_edge_acme_dns_multi_propagation_seconds: 300
+# nginx_edge_acme_dns_multi_nameservers: "1.1.1.1:53,8.8.8.8:53"
 
 nginx_edge_listen_addr: 127.0.0.1:18080
 nginx_edge_capture_mode: mirror

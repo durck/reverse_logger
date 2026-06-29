@@ -9,6 +9,7 @@
       ansible.builtin.set_fact:
         reverse_logger_repo_url: "{{ reverse_logger_repo_url | default('https://github.com/durck/reverse_logger.git', true) }}"
         reverse_logger_repo_version: "{{ reverse_logger_repo_version | default('main', true) }}"
+        reverse_logger_repo_update: "{{ reverse_logger_repo_update | default(true) }}"
         reverse_logger_src_dir: "{{ reverse_logger_src_dir | default('/opt/reverse-logger', true) }}"
         nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
         nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
@@ -34,6 +35,8 @@
         nginx_edge_self_signed_days: "{{ nginx_edge_self_signed_days | default(30, true) }}"
         timewebcloud_propagation_timeout: "{{ timewebcloud_propagation_timeout | default(120, true) }}"
         timewebcloud_polling_interval: "{{ timewebcloud_polling_interval | default(5, true) }}"
+        nginx_edge_acme_dns_multi_propagation_seconds: "{{ nginx_edge_acme_dns_multi_propagation_seconds | default(timewebcloud_propagation_timeout | default(120, true), true) }}"
+        nginx_edge_acme_dns_multi_nameservers: "{{ nginx_edge_acme_dns_multi_nameservers | default('', true) }}"
         tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/fullchain.pem', true) }}"
         tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/privkey.pem', true) }}"
         redirect_target: "{{ redirect_target | default('https://example.com', true) }}"
@@ -473,7 +476,7 @@
         repo: "{{ reverse_logger_repo_url }}"
         dest: "{{ reverse_logger_src_dir }}"
         version: "{{ reverse_logger_repo_version }}"
-        update: true
+        update: "{{ reverse_logger_repo_update | bool }}"
 
     - name: Build nginx-edge-forwarder
       ansible.builtin.command:
@@ -821,6 +824,8 @@
             ['certbot', 'certonly']
             + ['--cert-name', nginx_edge_acme_cert_name]
             + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
+            + ['--dns-multi-propagation-seconds', nginx_edge_acme_dns_multi_propagation_seconds | string]
+            + (((nginx_edge_acme_dns_multi_nameservers | default('', true) | length) > 0) | ternary(['--dns-multi-nameservers', nginx_edge_acme_dns_multi_nameservers], []))
             + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
             + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
             + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))
@@ -874,6 +879,8 @@
             ['certbot', 'certonly']
             + ['--cert-name', nginx_edge_acme_cert_name]
             + ['-a', 'dns-multi', '--dns-multi-credentials', nginx_edge_acme_dns_multi_credentials_path, '--preferred-challenges', 'dns']
+            + ['--dns-multi-propagation-seconds', nginx_edge_acme_dns_multi_propagation_seconds | string]
+            + (((nginx_edge_acme_dns_multi_nameservers | default('', true) | length) > 0) | ternary(['--dns-multi-nameservers', nginx_edge_acme_dns_multi_nameservers], []))
             + ['-d', rssh_domain, '--email', nginx_edge_acme_email, '--agree-tos', '--non-interactive']
             + (nginx_edge_acme_force_renewal | bool | ternary(['--force-renewal'], ['--keep-until-expiring']))
             + (nginx_edge_acme_staging | bool | ternary(['--staging'], []))

@@ -347,8 +347,10 @@ token that can edit DNS records for the domain zone:
 ```yaml
 nginx_edge_acme_challenge: dns-timeweb
 timewebcloud_auth_token: <Timeweb Cloud API token>
-timewebcloud_propagation_timeout: 120
+timewebcloud_propagation_timeout: 300
 timewebcloud_polling_interval: 5
+nginx_edge_acme_dns_multi_propagation_seconds: 300
+nginx_edge_acme_dns_multi_nameservers: "1.1.1.1:53,8.8.8.8:53"
 ```
 
 The playbook installs `certbot-dns-multi`, writes credentials to
@@ -356,6 +358,10 @@ The playbook installs `certbot-dns-multi`, writes credentials to
 `dns-multi` authenticator. In this mode the CA validates
 `_acme-challenge.<domain>` in DNS, so the VPS does not need inbound `80/tcp`
 for certificate issuance.
+
+`nginx_edge_acme_dns_multi_propagation_seconds` is passed directly to certbot's
+`--dns-multi-propagation-seconds` flag. Keep it at `300` for Timeweb zones that
+publish TXT records slowly; certbot's plugin default is only 60 seconds.
 
 Do not commit the Timeweb token. `group_vars/vps_edge.yml` is gitignored, but
 `ansible-vault` is still preferred:
@@ -411,6 +417,13 @@ From `deploy/ansible` (uses local `ansible.cfg`):
 ```sh
 cd deploy/ansible
 ansible-playbook vps-edge.yml
+```
+
+If the target already has `reverse_logger_src_dir` cloned but cannot reach
+GitHub over `443/tcp`, keep the existing checkout and skip fetches:
+
+```sh
+ansible-playbook vps-edge.yml -e reverse_logger_repo_update=false
 ```
 
 Deploy VPS edges and then immediately generate links on main:
