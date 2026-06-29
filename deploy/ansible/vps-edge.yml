@@ -4,49 +4,50 @@
   become: true
   gather_facts: true
 
-  vars:
-    reverse_logger_repo_url: https://github.com/durck/reverse_logger.git
-    reverse_logger_repo_version: main
-    reverse_logger_src_dir: /opt/reverse-logger
-    nginx_edge_listen_addr: 127.0.0.1:18080
-    nginx_edge_capture_mode: mirror
-    nginx_edge_log_path: ""
-    nginx_edge_spool_dir: /var/lib/reverse-logger/nginx-edge-spool
-    nginx_edge_forward_interval: 1s
-    nginx_edge_forward_timeout: 5s
-    nginx_edge_conf_path: /etc/nginx/sites-available/rssh-entrypoint.conf
-    nginx_edge_sites_enabled_dir: /etc/nginx/sites-enabled
-    nginx_edge_remove_default_site: true
-    nginx_edge_acme_enabled: true
-    nginx_edge_acme_challenge: http-01
-    nginx_edge_acme_email: ""
-    nginx_edge_acme_webroot: /var/www/letsencrypt
-    nginx_edge_acme_dns_multi_credentials_path: /etc/letsencrypt/dns-multi.ini
-    nginx_edge_acme_force_renewal: false
-    nginx_edge_acme_staging: false
-    nginx_edge_acme_http01_fallback_to_dns_timeweb: true
-    nginx_edge_create_self_signed_cert: false
-    nginx_edge_self_signed_days: 30
-    timewebcloud_propagation_timeout: 120
-    timewebcloud_polling_interval: 5
-    tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
-    tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
-    redirect_target: https://example.com
-    rssh_ws_path: /ws
-    rssh_push_path: /push
-    rssh_download_path_prefix: /dl
-    rssh_random_paths_enabled: false
-    rssh_random_paths_force: false
-    rssh_random_paths_allow_regenerate: true
-    rssh_random_paths_regenerate: false
-    rssh_random_paths_state_dir: "{{ playbook_dir }}/.generated-paths"
-    rssh_random_path_min_length: 6
-    rssh_random_path_max_length: 15
-    rssh_random_path_chars: ascii_lowercase,digits
-    main_reverse_ssh_port: 3232
-    main_logger_port: 8080
-
   pre_tasks:
+    - name: Apply default edge deployment variables
+      ansible.builtin.set_fact:
+        reverse_logger_repo_url: "{{ reverse_logger_repo_url | default('https://github.com/durck/reverse_logger.git', true) }}"
+        reverse_logger_repo_version: "{{ reverse_logger_repo_version | default('main', true) }}"
+        reverse_logger_src_dir: "{{ reverse_logger_src_dir | default('/opt/reverse-logger', true) }}"
+        nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
+        nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
+        nginx_edge_log_path: "{{ nginx_edge_log_path | default('', true) }}"
+        nginx_edge_spool_dir: "{{ nginx_edge_spool_dir | default('/var/lib/reverse-logger/nginx-edge-spool', true) }}"
+        nginx_edge_forward_interval: "{{ nginx_edge_forward_interval | default('1s', true) }}"
+        nginx_edge_forward_timeout: "{{ nginx_edge_forward_timeout | default('5s', true) }}"
+        nginx_edge_conf_path: "{{ nginx_edge_conf_path | default('/etc/nginx/sites-available/rssh-entrypoint.conf', true) }}"
+        nginx_edge_sites_enabled_dir: "{{ nginx_edge_sites_enabled_dir | default('/etc/nginx/sites-enabled', true) }}"
+        nginx_edge_remove_default_site: "{{ nginx_edge_remove_default_site | default(true) }}"
+        nginx_edge_acme_enabled: "{{ nginx_edge_acme_enabled | default(true) }}"
+        nginx_edge_acme_challenge: "{{ nginx_edge_acme_challenge | default('http-01', true) }}"
+        nginx_edge_acme_email: "{{ nginx_edge_acme_email | default('', true) }}"
+        nginx_edge_acme_webroot: "{{ nginx_edge_acme_webroot | default('/var/www/letsencrypt', true) }}"
+        nginx_edge_acme_dns_multi_credentials_path: "{{ nginx_edge_acme_dns_multi_credentials_path | default('/etc/letsencrypt/dns-multi.ini', true) }}"
+        nginx_edge_acme_force_renewal: "{{ nginx_edge_acme_force_renewal | default(false) }}"
+        nginx_edge_acme_staging: "{{ nginx_edge_acme_staging | default(false) }}"
+        nginx_edge_acme_http01_fallback_to_dns_timeweb: "{{ nginx_edge_acme_http01_fallback_to_dns_timeweb | default(true) }}"
+        nginx_edge_create_self_signed_cert: "{{ nginx_edge_create_self_signed_cert | default(false) }}"
+        nginx_edge_self_signed_days: "{{ nginx_edge_self_signed_days | default(30, true) }}"
+        timewebcloud_propagation_timeout: "{{ timewebcloud_propagation_timeout | default(120, true) }}"
+        timewebcloud_polling_interval: "{{ timewebcloud_polling_interval | default(5, true) }}"
+        tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (rssh_domain | default('')) ~ '/fullchain.pem', true) }}"
+        tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (rssh_domain | default('')) ~ '/privkey.pem', true) }}"
+        redirect_target: "{{ redirect_target | default('https://example.com', true) }}"
+        rssh_ws_path: "{{ rssh_ws_path | default('/ws', true) }}"
+        rssh_push_path: "{{ rssh_push_path | default('/push', true) }}"
+        rssh_download_path_prefix: "{{ rssh_download_path_prefix | default('/dl', true) }}"
+        rssh_random_paths_enabled: "{{ rssh_random_paths_enabled | default(false) }}"
+        rssh_random_paths_force: "{{ rssh_random_paths_force | default(false) }}"
+        rssh_random_paths_allow_regenerate: "{{ rssh_random_paths_allow_regenerate | default(true) }}"
+        rssh_random_paths_regenerate: "{{ rssh_random_paths_regenerate | default(false) }}"
+        rssh_random_paths_state_dir: "{{ rssh_random_paths_state_dir | default(playbook_dir ~ '/.generated-paths', true) }}"
+        rssh_random_path_min_length: "{{ rssh_random_path_min_length | default(6, true) }}"
+        rssh_random_path_max_length: "{{ rssh_random_path_max_length | default(15, true) }}"
+        rssh_random_path_chars: "{{ rssh_random_path_chars | default('ascii_lowercase,digits', true) }}"
+        main_reverse_ssh_port: "{{ main_reverse_ssh_port | default(3232, true) }}"
+        main_logger_port: "{{ main_logger_port | default(8080, true) }}"
+
     - name: Resolve random or configured public paths
       ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
 

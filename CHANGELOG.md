@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fix Ansible play defaults overriding `group_vars/vps_edge.yml` edge settings.
 - Fix play-level Timeweb token default overriding vaulted group vars.
 - Fix Timeweb DNS-01 ACME fallback availability checks for vaulted tokens.
 - Add automatic Ansible HTTP-01 to Timeweb DNS-01 ACME fallback when HTTP
