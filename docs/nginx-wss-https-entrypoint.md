@@ -233,6 +233,9 @@ ACME prerequisites:
 - Public `80/tcp` must be reachable for HTTP-01 validation; Timeweb DNS-01
   uses DNS TXT validation instead. `443/tcp` remains the WSS/HTTPS transport
   entrypoint.
+- In Ansible, `nginx_edge_acme_challenge: http-01` can fall back to Timeweb
+  DNS-01 automatically when `timewebcloud_auth_token` is set and
+  `nginx_edge_acme_http01_fallback_to_dns_timeweb: true`.
 - PTR is operational hygiene only and is not part of certificate validation.
 - This HTTP-01 flow does not issue wildcard certificates; use DNS-01 for
   wildcard names.

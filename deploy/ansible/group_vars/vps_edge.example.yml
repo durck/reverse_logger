@@ -37,6 +37,9 @@ nginx_edge_acme_webroot: /var/www/letsencrypt
 nginx_edge_acme_dns_multi_credentials_path: /etc/letsencrypt/dns-multi.ini
 nginx_edge_acme_force_renewal: false
 nginx_edge_acme_staging: false
+# With nginx_edge_acme_challenge: http-01, retry through Timeweb DNS-01 when
+# HTTP-01 fails and timewebcloud_auth_token is configured.
+nginx_edge_acme_http01_fallback_to_dns_timeweb: true
 tls_cert_path: "/etc/letsencrypt/live/{{ rssh_domain }}/fullchain.pem"
 tls_key_path: "/etc/letsencrypt/live/{{ rssh_domain }}/privkey.pem"
 nginx_edge_create_self_signed_cert: false

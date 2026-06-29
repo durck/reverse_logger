@@ -310,6 +310,23 @@ Default certificate issuance uses HTTP-01:
 nginx_edge_acme_challenge: http-01
 ```
 
+When `timewebcloud_auth_token` is set, the playbook can automatically fall
+back to Timeweb DNS-01 if HTTP-01 fails, for example when public `80/tcp` is
+blocked:
+
+```yaml
+nginx_edge_acme_http01_fallback_to_dns_timeweb: true
+timewebcloud_auth_token: <Timeweb Cloud API token>
+timewebcloud_propagation_timeout: 120
+timewebcloud_polling_interval: 5
+```
+
+With this setting, HTTP-01 is still attempted first. If it succeeds, DNS-01 is
+not used. If it fails and the token is valid, the playbook re-runs certbot with
+`dns-multi` and the Timeweb provider. If the token is missing, the playbook
+fails with the original HTTP-01 stderr and a message explaining how to enable
+fallback.
+
 For Timeweb DNS-01, switch the challenge mode and provide a Timeweb Cloud API
 token that can edit DNS records for the domain zone:
 

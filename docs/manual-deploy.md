@@ -513,6 +513,11 @@ sudo certbot certonly \
   --keep-until-expiring
 ```
 
+For Ansible-managed hosts you can keep `nginx_edge_acme_challenge: http-01`
+and still provide `timewebcloud_auth_token`. When HTTP-01 times out or fails,
+the playbook automatically retries with Timeweb DNS-01 if
+`nginx_edge_acme_http01_fallback_to_dns_timeweb: true`.
+
 If you are migrating an existing HTTP-01 certificate and need to reissue it
 immediately through DNS-01, replace `--keep-until-expiring` with
 `--force-renewal` for that one run. Keep the Timeweb token out of shell history
