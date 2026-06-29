@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add Ansible automation for main-side `reverse_ssh link` generation after
+  ready VPS edge deployments, including existing-link checks and force rotation.
 - Add Timeweb DNS-01 ACME support to Ansible and manual VPS deployment docs.
 - Harden ingress/webhook correlation with observed `forwarder_ip`, dual timestamp matching, configurable windows, fallback methods, and diagnostics.
 - Fix nginx mirror capture to preserve original transport paths for edge forwarder spooling.

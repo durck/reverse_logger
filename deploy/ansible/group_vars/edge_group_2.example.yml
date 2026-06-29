@@ -1,4 +1,5 @@
 # Copy to group_vars/edge_group_2.yml
+# reverse-ssh-links.yml uses these public paths for generated client links.
 
 rssh_ws_path: /track_group2
 rssh_push_path: /ping_group2

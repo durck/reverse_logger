@@ -1,6 +1,5 @@
 # Copy to group_vars/edge_group_1.yml
-# Generate the matching link on main:
-#   link --wss --ws-path /track383211 --push-path /ping198287 --name dl/main-g1 ...
+# reverse-ssh-links.yml uses these public paths for generated client links.
 
 rssh_ws_path: /track383211
 rssh_push_path: /ping198287

@@ -739,6 +739,25 @@ For WSS/HTTPS, the public DNS record, TLS certificate, nginx route, SoftEther
 path, and backend reachability must already be valid. Otherwise the generated
 client will have a correct callback value but no reachable public endpoint.
 
+If the VPS entrypoints are managed by Ansible, you can automate this section
+from the main host with:
+
+```sh
+cd /opt/reverse-logger/deploy/ansible
+ansible-playbook reverse-ssh-links.yml
+```
+
+For a combined VPS rollout followed by link generation:
+
+```sh
+ansible-playbook edge-and-links.yml
+```
+
+The playbook skips any VPS that is not fully configured yet: nginx must validate
+successfully, `nginx` and `nginx-edge-forwarder` must be active, the forwarder
+env file must contain the expected `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, and TLS
+files must exist unless `reverse_ssh_link_check_tls_files=false`.
+
 ### 12.1 Connect to the catcher console
 
 From the main server, load `.env` and connect:
@@ -797,6 +816,25 @@ Use the same values in `link`:
 ```text
 link --wss --ws-path /rssh-ws --push-path /rssh-push --name main
 link --https --ws-path /rssh-ws --push-path /rssh-push --name main
+```
+
+For public VPS entrypoints, pass the public domain explicitly and include the
+client build options used by the Ansible helper:
+
+```text
+link --wss -s entry1.example.com:443 --ws-path /track383211 --push-path /ping198287 --name edge1-wss-windows-amd64 --goos windows --goarch amd64 --garble --auto-proxy --use-kerberos
+```
+
+Check existing generated links before creating another one:
+
+```text
+link -l
+```
+
+Remove or rotate an old link by name or id:
+
+```text
+link -r edge1-wss-windows-amd64
 ```
 
 The command prints a download URL. Copy that URL to the target machine,

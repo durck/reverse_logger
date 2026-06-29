@@ -1,0 +1,37 @@
+# Copy to group_vars/main.yml (gitignored).
+# These settings are used by reverse-ssh-links.yml on the main host.
+
+reverse_logger_dir: /opt/reverse-logger
+reverse_ssh_link_output_dir: /opt/reverse-logger/generated-links
+
+# Operator console exposed by the main reverse_ssh listener.
+reverse_ssh_console_host: 127.0.0.1
+reverse_ssh_console_port: 3232
+reverse_ssh_console_user: root
+reverse_ssh_console_key: /root/.ssh/reverse_ssh_operator
+reverse_ssh_console_timeout: 60
+reverse_ssh_console_command_delay: 1.0
+
+# The playbook is idempotent by name: existing links are kept unless
+# reverse_ssh_link_force_rotate is true.
+reverse_ssh_link_execute: true
+reverse_ssh_link_force_rotate: false
+reverse_ssh_link_check_tls_files: true
+
+reverse_ssh_link_transports:
+  - wss
+  # - https
+
+reverse_ssh_link_platforms:
+  - goos: windows
+    goarch: amd64
+  # - goos: linux
+  #   goarch: amd64
+
+reverse_ssh_link_external_port: 443
+reverse_ssh_link_name_template: "{vps_host}-{transport}-{goos}-{goarch}"
+
+reverse_ssh_link_garble: true
+reverse_ssh_link_auto_proxy: true
+reverse_ssh_link_use_kerberos: true
+reverse_ssh_link_extra_args: []

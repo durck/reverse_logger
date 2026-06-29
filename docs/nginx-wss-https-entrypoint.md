@@ -157,6 +157,22 @@ link --wss --ws-path /rssh-ws --push-path /rssh-push --name main
 link --https --ws-path /rssh-ws --push-path /rssh-push --name main
 ```
 
+For Ansible-managed VPS edges, `deploy/ansible/reverse-ssh-links.yml` can do
+this from the main host after the VPS passes readiness checks. It reads
+`rssh_domain`, `rssh_ws_path`, and `rssh_push_path` from inventory/group vars,
+checks `link -l`, skips existing names, and optionally rotates them with
+`link -r <name>`:
+
+```sh
+cd deploy/ansible
+ansible-playbook reverse-ssh-links.yml
+ansible-playbook reverse-ssh-links.yml -e reverse_ssh_link_force_rotate=true
+```
+
+The generated link command includes `--garble`, `--auto-proxy`, and
+`--use-kerberos` by default. Configure transports, platforms, console host, and
+the name template in `group_vars/main.yml`.
+
 ### 3. Download and run the generated client on the target machine
 
 The generated client connects back to the public nginx domain through WSS or
@@ -199,9 +215,12 @@ The playbook installs nginx, clones `reverse_logger`, builds
 HTTP-01 webroot validation or Timeweb DNS-01 validation, renders nginx from
 the same WSS/HTTPS semantics as this document, and enables both services. It
 intentionally does not create DNS, PTR records, cloud firewall rules,
-SoftEther accounts, or the main `reverse_ssh` listener. See
+SoftEther accounts, or the main `reverse_ssh` listener. Use
+`edge-and-links.yml` when you want the VPS edge rollout followed immediately by
+main-side link generation. See
 [../deploy/ansible/README.md](../deploy/ansible/README.md) for the variable
-list, staging mode, DNS-01 mode, and self-signed smoke mode.
+list, staging mode, DNS-01 mode, self-signed smoke mode, and automated link
+generation.
 
 ACME prerequisites:
 
