@@ -13,17 +13,18 @@ reverse_logger_go_proxy_candidates:
   - https://goproxy.cn,direct
   - direct
 reverse_logger_go_proxy_probe_module_path: golang.org/x/exp
-reverse_logger_go_proxy_probe_timeout: 5
+reverse_logger_go_proxy_probe_timeout: 3
 reverse_logger_go_direct_probe_hosts:
   - golang.org
   - modernc.org
   - github.com
+reverse_logger_go_direct_probe_timeout: 3
 reverse_logger_go_sumdb: "off"
-reverse_logger_go_retries: 3
-reverse_logger_go_delay: 10
+reverse_logger_go_retries: 2
+reverse_logger_go_delay: 5
 reverse_logger_go_download_trace: true
-reverse_logger_go_download_async_timeout: 600
-reverse_logger_go_download_poll_interval: 10
+reverse_logger_go_download_async_timeout: 180
+reverse_logger_go_download_poll_interval: 5
 
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232
@@ -70,10 +71,10 @@ nginx_edge_acme_http01_preflight_enabled: true
 nginx_edge_acme_http01_preflight_timeout: 10
 # Network-bound deployment tasks use bounded retries to survive transient DNS,
 # package mirror, Snap Store, GitHub, and ACME API failures.
-nginx_edge_network_retries: 5
-nginx_edge_network_delay: 10
-nginx_edge_snap_retries: 4
-nginx_edge_snap_delay: 15
+nginx_edge_network_retries: 3
+nginx_edge_network_delay: 5
+nginx_edge_snap_retries: 2
+nginx_edge_snap_delay: 5
 nginx_edge_snap_refresh_core_after_install: true
 # Certbot installs through Snap first. If Snap Store remains unavailable after
 # retries, the playbook removes only Certbot snap artifacts created by this run
@@ -86,7 +87,7 @@ nginx_edge_certbot_venv_path: /opt/certbot
 # Keep ACME retries conservative to avoid consuming Let's Encrypt failed
 # validation limits during real DNS or HTTP challenge misconfiguration.
 nginx_edge_acme_retries: 2
-nginx_edge_acme_delay: 30
+nginx_edge_acme_delay: 15
 # When vps_internal_ip is not set explicitly, query the main logger for the
 # source IP it sees from this VPS. Leave required=false to fall back to the
 # logger's observed forwarder_ip when the probe is unavailable.

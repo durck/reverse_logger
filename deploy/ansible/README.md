@@ -410,15 +410,15 @@ preflight checks, Snap Store operations, GitHub checkout, Go module downloads,
 and DNS-01 certbot runs.
 
 ```yaml
-nginx_edge_network_retries: 5
-nginx_edge_network_delay: 10
-nginx_edge_snap_retries: 4
-nginx_edge_snap_delay: 15
+nginx_edge_network_retries: 3
+nginx_edge_network_delay: 5
+nginx_edge_snap_retries: 2
+nginx_edge_snap_delay: 5
 nginx_edge_certbot_install_method: snap
 nginx_edge_certbot_snap_fallback_to_pip: true
 nginx_edge_certbot_venv_path: /opt/certbot
 nginx_edge_acme_retries: 2
-nginx_edge_acme_delay: 30
+nginx_edge_acme_delay: 15
 ```
 
 Snap retries are shorter than the generic network retry budget because a
@@ -437,17 +437,18 @@ reverse_logger_go_proxy_candidates:
   - https://goproxy.cn,direct
   - direct
 reverse_logger_go_proxy_probe_module_path: golang.org/x/exp
-reverse_logger_go_proxy_probe_timeout: 5
+reverse_logger_go_proxy_probe_timeout: 3
 reverse_logger_go_direct_probe_hosts:
   - golang.org
   - modernc.org
   - github.com
+reverse_logger_go_direct_probe_timeout: 3
 reverse_logger_go_sumdb: "off"
-reverse_logger_go_retries: 3
-reverse_logger_go_delay: 10
+reverse_logger_go_retries: 2
+reverse_logger_go_delay: 5
 reverse_logger_go_download_trace: true
-reverse_logger_go_download_async_timeout: 600
-reverse_logger_go_download_poll_interval: 10
+reverse_logger_go_download_async_timeout: 180
+reverse_logger_go_download_poll_interval: 5
 ```
 
 `GOTOOLCHAIN=local` prevents `go mod download` from fetching a newer compiler
@@ -462,7 +463,9 @@ The module download uses the committed `go.sum`; set
 should verify modules online. `reverse_logger_go_download_trace` enables
 `go mod download -x` for useful failure diagnostics. Ansible cannot display a
 byte-level Go download progress bar, but the async timeout/poll settings make
-long downloads show periodic polling instead of a silent task.
+long downloads show periodic polling instead of a silent task. The default
+budgets intentionally fail fast; increase the retry, delay, and async timeout
+values for very slow targets.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a

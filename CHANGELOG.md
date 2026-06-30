@@ -15,6 +15,8 @@
   avoid target DNS failures against `golang.org` vanity imports.
 - Probe Go module proxy candidates from the VPS before downloading modules and
   run the module download with async polling/trace output.
+- Shorten default VPS edge retry and timeout budgets so broken target-side
+  network paths fail faster during interactive deploys.
 - Add bounded retries and Snap Store preflight checks to Ansible VPS edge
   deployment network tasks.
 - Add a main-observed source IP probe for Ansible VPS deployments and stop
