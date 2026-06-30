@@ -14,9 +14,16 @@
         reverse_logger_go_min_version: "{{ reverse_logger_go_min_version | default('1.23', true) }}"
         reverse_logger_go_toolchain: "{{ reverse_logger_go_toolchain | default('local', true) }}"
         reverse_logger_go_proxy: "{{ reverse_logger_go_proxy | default('https://goproxy.io,direct', true) }}"
+        reverse_logger_go_proxy_candidates: "{{ (reverse_logger_go_proxy_candidates | default([reverse_logger_go_proxy | default('https://goproxy.io,direct', true), 'https://proxy.golang.com.cn,direct', 'https://goproxy.cn,direct', 'direct'], true)) | unique | list }}"
+        reverse_logger_go_proxy_probe_module_path: "{{ reverse_logger_go_proxy_probe_module_path | default('golang.org/x/exp', true) }}"
+        reverse_logger_go_proxy_probe_timeout: "{{ reverse_logger_go_proxy_probe_timeout | default(5, true) }}"
+        reverse_logger_go_direct_probe_hosts: "{{ reverse_logger_go_direct_probe_hosts | default(['golang.org', 'modernc.org', 'github.com'], true) }}"
         reverse_logger_go_sumdb: "{{ reverse_logger_go_sumdb | default('off', true) }}"
         reverse_logger_go_retries: "{{ reverse_logger_go_retries | default(3, true) }}"
         reverse_logger_go_delay: "{{ reverse_logger_go_delay | default(10, true) }}"
+        reverse_logger_go_download_trace: "{{ reverse_logger_go_download_trace | default(true) }}"
+        reverse_logger_go_download_async_timeout: "{{ reverse_logger_go_download_async_timeout | default(600, true) }}"
+        reverse_logger_go_download_poll_interval: "{{ reverse_logger_go_download_poll_interval | default(10, true) }}"
         nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
         nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
         nginx_edge_log_path: "{{ nginx_edge_log_path | default('', true) }}"
@@ -999,21 +1006,90 @@
           reverse_logger_go_min_version only if the source still supports it.
         quiet: true
 
-    - name: Download Go modules
+    - name: Check Go module proxy candidates
+      ansible.builtin.uri:
+        url: "{{ item.split(',')[0] }}/{{ reverse_logger_go_proxy_probe_module_path }}/@latest"
+        method: GET
+        return_content: false
+        status_code: 200
+        timeout: "{{ reverse_logger_go_proxy_probe_timeout | int }}"
+      loop: "{{ reverse_logger_go_proxy_candidates }}"
+      register: reverse_logger_go_proxy_probe
+      changed_when: false
+      failed_when: false
+      when: item is match('^https?://')
+
+    - name: Select first reachable Go module proxy
+      ansible.builtin.set_fact:
+        reverse_logger_go_effective_proxy: >-
+          {{
+            (
+              reverse_logger_go_proxy_probe.results | default([])
+              | selectattr('status', 'defined')
+              | selectattr('status', 'equalto', 200)
+              | map(attribute='item')
+              | first
+            ) | default('', true)
+          }}
+
+    - name: Check direct Go module origin DNS fallback
       ansible.builtin.command:
         argv:
-          - go
-          - mod
-          - download
+          - getent
+          - hosts
+          - "{{ item }}"
+      loop: "{{ reverse_logger_go_direct_probe_hosts }}"
+      register: reverse_logger_go_direct_probe
+      changed_when: false
+      failed_when: false
+      when:
+        - (reverse_logger_go_effective_proxy | default('') | length) == 0
+        - "'direct' in reverse_logger_go_proxy_candidates"
+
+    - name: Select direct Go module fallback
+      ansible.builtin.set_fact:
+        reverse_logger_go_effective_proxy: direct
+      when:
+        - (reverse_logger_go_effective_proxy | default('') | length) == 0
+        - (reverse_logger_go_direct_probe.results | default([]) | length) > 0
+        - >-
+          reverse_logger_go_direct_probe.results | default([])
+          | rejectattr('rc', 'equalto', 0)
+          | list
+          | length == 0
+
+    - name: Fail when no Go module source is reachable
+      ansible.builtin.fail:
+        msg: >-
+          No Go module proxy candidate is reachable from the target. Candidates:
+          {{ reverse_logger_go_proxy_candidates | join(', ') }}. Probe module:
+          {{ reverse_logger_go_proxy_probe_module_path }}. Fix target DNS/HTTPS
+          or set reverse_logger_go_proxy_candidates to a reachable internal proxy.
+          Direct fallback DNS hosts: {{ reverse_logger_go_direct_probe_hosts | join(', ') }}.
+      when: (reverse_logger_go_effective_proxy | default('') | length) == 0
+
+    - name: Show selected Go module proxy
+      ansible.builtin.debug:
+        msg: "Using GOPROXY={{ reverse_logger_go_effective_proxy }} for Go module download."
+
+    - name: Download Go modules
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['go', 'mod', 'download']
+            + ((reverse_logger_go_download_trace | bool) | ternary(['-x'], []))
+          }}
       args:
         chdir: "{{ reverse_logger_src_dir }}"
       environment:
         CGO_ENABLED: "0"
         GOTOOLCHAIN: "{{ reverse_logger_go_toolchain }}"
-        GOPROXY: "{{ reverse_logger_go_proxy }}"
+        GOPROXY: "{{ reverse_logger_go_effective_proxy }}"
         GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       register: go_mod_download
       changed_when: false
+      async: "{{ reverse_logger_go_download_async_timeout | int }}"
+      poll: "{{ reverse_logger_go_download_poll_interval | int }}"
       until: go_mod_download is succeeded
       retries: "{{ reverse_logger_go_retries | int }}"
       delay: "{{ reverse_logger_go_delay | int }}"
@@ -1034,7 +1110,7 @@
       environment:
         CGO_ENABLED: "0"
         GOTOOLCHAIN: "{{ reverse_logger_go_toolchain }}"
-        GOPROXY: "{{ reverse_logger_go_proxy }}"
+        GOPROXY: "{{ reverse_logger_go_effective_proxy }}"
         GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       changed_when: false
 

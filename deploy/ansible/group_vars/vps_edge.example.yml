@@ -7,9 +7,23 @@ reverse_logger_repo_update: true
 reverse_logger_go_min_version: "1.23"
 reverse_logger_go_toolchain: local
 reverse_logger_go_proxy: https://goproxy.io,direct
+reverse_logger_go_proxy_candidates:
+  - https://goproxy.io,direct
+  - https://proxy.golang.com.cn,direct
+  - https://goproxy.cn,direct
+  - direct
+reverse_logger_go_proxy_probe_module_path: golang.org/x/exp
+reverse_logger_go_proxy_probe_timeout: 5
+reverse_logger_go_direct_probe_hosts:
+  - golang.org
+  - modernc.org
+  - github.com
 reverse_logger_go_sumdb: "off"
 reverse_logger_go_retries: 3
 reverse_logger_go_delay: 10
+reverse_logger_go_download_trace: true
+reverse_logger_go_download_async_timeout: 600
+reverse_logger_go_download_poll_interval: 10
 
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232

@@ -431,18 +431,38 @@ deployment:
 reverse_logger_go_min_version: "1.23"
 reverse_logger_go_toolchain: local
 reverse_logger_go_proxy: https://goproxy.io,direct
+reverse_logger_go_proxy_candidates:
+  - https://goproxy.io,direct
+  - https://proxy.golang.com.cn,direct
+  - https://goproxy.cn,direct
+  - direct
+reverse_logger_go_proxy_probe_module_path: golang.org/x/exp
+reverse_logger_go_proxy_probe_timeout: 5
+reverse_logger_go_direct_probe_hosts:
+  - golang.org
+  - modernc.org
+  - github.com
 reverse_logger_go_sumdb: "off"
 reverse_logger_go_retries: 3
 reverse_logger_go_delay: 10
+reverse_logger_go_download_trace: true
+reverse_logger_go_download_async_timeout: 600
+reverse_logger_go_download_poll_interval: 10
 ```
 
 `GOTOOLCHAIN=local` prevents `go mod download` from fetching a newer compiler
-from `proxy.golang.org` when target DNS is flaky. The default `GOPROXY` avoids
-Go's Google-hosted proxy and vanity import lookup path first; override
-`reverse_logger_go_proxy` if the target environment has a preferred internal or
-public Go module proxy. The module download uses the committed `go.sum`; set
+from `proxy.golang.org` when target DNS is flaky. Before downloading modules,
+the playbook probes `reverse_logger_go_proxy_candidates` from the target and
+uses the first reachable module proxy. If none of the HTTP proxies respond, it
+falls back to `direct` only when the configured direct origin hosts resolve from
+the target.
+
+The module download uses the committed `go.sum`; set
 `reverse_logger_go_sumdb` back to a checksum database if the target environment
-should verify modules online.
+should verify modules online. `reverse_logger_go_download_trace` enables
+`go mod download -x` for useful failure diagnostics. Ansible cannot display a
+byte-level Go download progress bar, but the async timeout/poll settings make
+long downloads show periodic polling instead of a silent task.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a
