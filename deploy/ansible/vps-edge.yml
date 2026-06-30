@@ -13,7 +13,7 @@
         reverse_logger_src_dir: "{{ reverse_logger_src_dir | default('/opt/reverse-logger', true) }}"
         reverse_logger_go_min_version: "{{ reverse_logger_go_min_version | default('1.23', true) }}"
         reverse_logger_go_toolchain: "{{ reverse_logger_go_toolchain | default('local', true) }}"
-        reverse_logger_go_proxy: "{{ reverse_logger_go_proxy | default('direct', true) }}"
+        reverse_logger_go_proxy: "{{ reverse_logger_go_proxy | default('https://goproxy.io,direct', true) }}"
         reverse_logger_go_sumdb: "{{ reverse_logger_go_sumdb | default('off', true) }}"
         reverse_logger_go_retries: "{{ reverse_logger_go_retries | default(3, true) }}"
         reverse_logger_go_delay: "{{ reverse_logger_go_delay | default(10, true) }}"

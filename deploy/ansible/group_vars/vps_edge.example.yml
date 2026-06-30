@@ -6,7 +6,7 @@ redirect_target: https://example.com
 reverse_logger_repo_update: true
 reverse_logger_go_min_version: "1.23"
 reverse_logger_go_toolchain: local
-reverse_logger_go_proxy: direct
+reverse_logger_go_proxy: https://goproxy.io,direct
 reverse_logger_go_sumdb: "off"
 reverse_logger_go_retries: 3
 reverse_logger_go_delay: 10

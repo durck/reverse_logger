@@ -430,17 +430,19 @@ deployment:
 ```yaml
 reverse_logger_go_min_version: "1.23"
 reverse_logger_go_toolchain: local
-reverse_logger_go_proxy: direct
+reverse_logger_go_proxy: https://goproxy.io,direct
 reverse_logger_go_sumdb: "off"
 reverse_logger_go_retries: 3
 reverse_logger_go_delay: 10
 ```
 
 `GOTOOLCHAIN=local` prevents `go mod download` from fetching a newer compiler
-from `proxy.golang.org` when target DNS is flaky. The module download uses the
-committed `go.sum`; set `reverse_logger_go_proxy` / `reverse_logger_go_sumdb`
-back to public Go defaults if the target environment should use the public Go
-proxy and checksum database.
+from `proxy.golang.org` when target DNS is flaky. The default `GOPROXY` avoids
+Go's Google-hosted proxy and vanity import lookup path first; override
+`reverse_logger_go_proxy` if the target environment has a preferred internal or
+public Go module proxy. The module download uses the committed `go.sum`; set
+`reverse_logger_go_sumdb` back to a checksum database if the target environment
+should verify modules online.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a

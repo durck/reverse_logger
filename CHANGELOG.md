@@ -9,6 +9,8 @@
 - Avoid Go auto-toolchain downloads during Ansible VPS edge builds and lower
   the module Go directive to the dependency-required 1.23 line.
 - Add a shorter dedicated retry budget for target-side Go module downloads.
+- Use a non-Google Go module proxy by default during VPS edge deployment to
+  avoid target DNS failures against `golang.org` vanity imports.
 - Add bounded retries and Snap Store preflight checks to Ansible VPS edge
   deployment network tasks.
 - Add a main-observed source IP probe for Ansible VPS deployments and stop
