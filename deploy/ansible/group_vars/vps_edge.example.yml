@@ -48,6 +48,17 @@ nginx_edge_acme_http01_fallback_to_dns_timeweb: true
 # DNS, port 80, or nginx webroot routing is wrong.
 nginx_edge_acme_http01_preflight_enabled: true
 nginx_edge_acme_http01_preflight_timeout: 10
+# Network-bound deployment tasks use bounded retries to survive transient DNS,
+# package mirror, Snap Store, GitHub, and ACME API failures.
+nginx_edge_network_retries: 5
+nginx_edge_network_delay: 10
+nginx_edge_snap_retries: 8
+nginx_edge_snap_delay: 20
+nginx_edge_snap_refresh_core_after_install: true
+# Keep ACME retries conservative to avoid consuming Let's Encrypt failed
+# validation limits during real DNS or HTTP challenge misconfiguration.
+nginx_edge_acme_retries: 2
+nginx_edge_acme_delay: 30
 # When vps_internal_ip is not set explicitly, query the main logger for the
 # source IP it sees from this VPS. Leave required=false to fall back to the
 # logger's observed forwarder_ip when the probe is unavailable.

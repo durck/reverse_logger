@@ -41,6 +41,13 @@
         timewebcloud_polling_interval: "{{ timewebcloud_polling_interval | default(5, true) }}"
         nginx_edge_acme_dns_multi_propagation_seconds: "{{ nginx_edge_acme_dns_multi_propagation_seconds | default(timewebcloud_propagation_timeout | default(120, true), true) }}"
         nginx_edge_acme_dns_multi_nameservers: "{{ nginx_edge_acme_dns_multi_nameservers | default('', true) }}"
+        nginx_edge_network_retries: "{{ nginx_edge_network_retries | default(5, true) }}"
+        nginx_edge_network_delay: "{{ nginx_edge_network_delay | default(10, true) }}"
+        nginx_edge_snap_retries: "{{ nginx_edge_snap_retries | default(8, true) }}"
+        nginx_edge_snap_delay: "{{ nginx_edge_snap_delay | default(20, true) }}"
+        nginx_edge_snap_refresh_core_after_install: "{{ nginx_edge_snap_refresh_core_after_install | default(true) }}"
+        nginx_edge_acme_retries: "{{ nginx_edge_acme_retries | default(2, true) }}"
+        nginx_edge_acme_delay: "{{ nginx_edge_acme_delay | default(30, true) }}"
         tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/fullchain.pem', true) }}"
         tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/privkey.pem', true) }}"
         redirect_target: "{{ redirect_target | default('https://example.com', true) }}"
@@ -57,6 +64,7 @@
         rssh_random_path_chars: "{{ rssh_random_path_chars | default('ascii_lowercase,digits', true) }}"
         main_reverse_ssh_port: "{{ main_reverse_ssh_port | default(3232, true) }}"
         main_logger_port: "{{ main_logger_port | default(8080, true) }}"
+      tags: always
 
     - name: Resolve random or configured public paths
       ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
@@ -112,19 +120,30 @@
         - vps_internal_ip is not defined or vps_internal_ip | length == 0
 
     - name: Detect main-observed VPS source IP
-      ansible.builtin.uri:
-        url: "{{ edge_source_ip_probe_url }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ edge_forward_token }}"
-        return_content: true
-        status_code: 200
-        timeout: "{{ vps_internal_ip_probe_timeout | int }}"
-        validate_certs: "{{ vps_internal_ip_probe_validate_certs | bool }}"
-      register: vps_source_ip_probe
-      changed_when: false
-      failed_when: false
-      no_log: true
+      block:
+        - name: Query main-observed VPS source IP
+          ansible.builtin.uri:
+            url: "{{ edge_source_ip_probe_url }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ edge_forward_token }}"
+            return_content: true
+            status_code: 200
+            timeout: "{{ vps_internal_ip_probe_timeout | int }}"
+            validate_certs: "{{ vps_internal_ip_probe_validate_certs | bool }}"
+          register: vps_source_ip_probe
+          changed_when: false
+          no_log: true
+          until: (vps_source_ip_probe.status | default(0) | int) == 200
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+      rescue:
+        - name: Continue without main-observed VPS source IP
+          ansible.builtin.debug:
+            msg: >-
+              Source IP probe failed after retries; continuing because
+              vps_internal_ip_probe_required={{ vps_internal_ip_probe_required | bool }}.
+          changed_when: false
       when:
         - vps_internal_ip_probe_enabled | bool
         - edge_source_ip_probe_url is defined
@@ -276,7 +295,12 @@
           - nginx
           - openssl
         update_cache: true
+        cache_valid_time: 3600
         state: present
+      register: os_packages_install
+      until: os_packages_install is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
       when: ansible_facts['os_family'] == 'Debian'
 
     - name: Check reverse_ssh backend reachability from VPS
@@ -285,7 +309,11 @@
         port: "{{ backend_reverse_ssh_port_resolved }}"
         timeout: 5
         connect_timeout: 2
+      register: reverse_ssh_backend_reachability
       changed_when: false
+      until: reverse_ssh_backend_reachability is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
       when:
         - backend_reverse_ssh_host is defined
         - backend_reverse_ssh_host | length > 0
@@ -296,7 +324,11 @@
         port: "{{ edge_forward_port_resolved }}"
         timeout: 5
         connect_timeout: 2
+      register: central_logger_reachability
       changed_when: false
+      until: central_logger_reachability is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
       when:
         - edge_forward_host is defined
         - edge_forward_host | length > 0
@@ -305,9 +337,16 @@
       ansible.builtin.apt:
         name: snapd
         state: present
+        cache_valid_time: 3600
+      register: snapd_install
+      until: snapd_install is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
       when:
         - ansible_facts['os_family'] == 'Debian'
         - nginx_edge_acme_enabled | bool
+      tags:
+        - snap
 
     - name: Enable snapd socket
       ansible.builtin.systemd:
@@ -315,6 +354,8 @@
         enabled: true
         state: started
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
 
     - name: Wait for snapd seed
       ansible.builtin.command:
@@ -323,8 +364,44 @@
           - wait
           - system
           - seed.loaded
+      register: snap_seed_wait
       changed_when: false
+      until: snap_seed_wait.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+
+    - name: Check installed snap core
+      ansible.builtin.command:
+        argv:
+          - snap
+          - list
+          - core
+      register: snap_core_list
+      changed_when: false
+      failed_when: false
+      when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+
+    - name: Check Snap Store DNS before installing core
+      ansible.builtin.command:
+        argv:
+          - getent
+          - hosts
+          - api.snapcraft.io
+      register: snap_core_store_dns
+      changed_when: false
+      until: snap_core_store_dns.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (snap_core_list.rc | default(1) | int) != 0
+      tags:
+        - snap
 
     - name: Install snap core
       ansible.builtin.command:
@@ -339,7 +416,16 @@
       failed_when:
         - snap_core_install.rc != 0
         - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
-      when: nginx_edge_acme_enabled | bool
+      until: >-
+        snap_core_install.rc == 0
+        or 'already installed' in (snap_core_install.stdout + snap_core_install.stderr)
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (snap_core_list.rc | default(1) | int) != 0
+      tags:
+        - snap
 
     - name: Refresh snap core
       ansible.builtin.command:
@@ -347,8 +433,50 @@
           - snap
           - refresh
           - core
+      register: snap_core_refresh
       changed_when: false
+      until: snap_core_refresh.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_snap_refresh_core_after_install | bool
+        - snap_core_install is defined
+        - not (snap_core_install.skipped | default(false) | bool)
+        - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
+        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+      tags:
+        - snap
+
+    - name: Check installed Certbot snap
+      ansible.builtin.command:
+        argv:
+          - snap
+          - list
+          - certbot
+      register: certbot_snap_list
+      changed_when: false
+      failed_when: false
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+
+    - name: Check Snap Store DNS before installing Certbot
+      ansible.builtin.command:
+        argv:
+          - getent
+          - hosts
+          - api.snapcraft.io
+      register: certbot_snap_store_dns
+      changed_when: false
+      until: certbot_snap_store_dns.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (certbot_snap_list.rc | default(1) | int) != 0
+      tags:
+        - snap
 
     - name: Install Certbot snap
       ansible.builtin.command:
@@ -364,7 +492,65 @@
       failed_when:
         - certbot_snap_install.rc != 0
         - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
-      when: nginx_edge_acme_enabled | bool
+      until: >-
+        certbot_snap_install.rc == 0
+        or 'already installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (certbot_snap_list.rc | default(1) | int) != 0
+      tags:
+        - snap
+
+    - name: Check installed certbot-dns-multi snap
+      ansible.builtin.command:
+        argv:
+          - snap
+          - list
+          - certbot-dns-multi
+      register: certbot_dns_multi_list
+      changed_when: false
+      failed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
+      tags:
+        - snap
+
+    - name: Check Snap Store DNS before installing certbot-dns-multi
+      ansible.builtin.command:
+        argv:
+          - getent
+          - hosts
+          - api.snapcraft.io
+      register: certbot_dns_multi_store_dns
+      changed_when: false
+      until: certbot_dns_multi_store_dns.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (certbot_dns_multi_list.rc | default(1) | int) != 0
+        - >-
+          nginx_edge_acme_challenge == 'dns-timeweb'
+          or (
+            nginx_edge_acme_challenge == 'http-01'
+            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+            and timewebcloud_auth_token is defined
+            and (timewebcloud_auth_token | default('', true) | length > 20)
+            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+          )
+      tags:
+        - snap
 
     - name: Install certbot-dns-multi snap
       ansible.builtin.command:
@@ -379,8 +565,14 @@
       failed_when:
         - certbot_dns_multi_install.rc != 0
         - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+      until: >-
+        certbot_dns_multi_install.rc == 0
+        or 'already installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
+        - (certbot_dns_multi_list.rc | default(1) | int) != 0
         - >-
           nginx_edge_acme_challenge == 'dns-timeweb'
           or (
@@ -390,6 +582,8 @@
             and (timewebcloud_auth_token | default('', true) | length > 20)
             and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
           )
+      tags:
+        - snap
 
     - name: Trust Certbot snap plugins with root
       ansible.builtin.command:
@@ -398,7 +592,11 @@
           - set
           - certbot
           - trust-plugin-with-root=ok
+      register: certbot_snap_trust_plugin
       changed_when: false
+      until: certbot_snap_trust_plugin.rc == 0
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
         - >-
@@ -410,6 +608,8 @@
             and (timewebcloud_auth_token | default('', true) | length > 20)
             and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
           )
+      tags:
+        - snap
 
     - name: Connect certbot-dns-multi plugin
       ansible.builtin.command:
@@ -423,6 +623,11 @@
       failed_when:
         - certbot_dns_multi_connect.rc != 0
         - "'already connected' not in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)"
+      until: >-
+        certbot_dns_multi_connect.rc == 0
+        or 'already connected' in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)
+      retries: "{{ nginx_edge_snap_retries | int }}"
+      delay: "{{ nginx_edge_snap_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
         - >-
@@ -434,6 +639,8 @@
             and (timewebcloud_auth_token | default('', true) | length > 20)
             and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
           )
+      tags:
+        - snap
 
     - name: Link Certbot into /usr/bin
       ansible.builtin.file:
@@ -442,6 +649,8 @@
         state: link
         force: true
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
 
     - name: Create Let's Encrypt configuration directory
       ansible.builtin.file:
@@ -501,6 +710,26 @@
         dest: "{{ reverse_logger_src_dir }}"
         version: "{{ reverse_logger_repo_version }}"
         update: "{{ reverse_logger_repo_update | bool }}"
+      register: reverse_logger_repo_checkout
+      until: reverse_logger_repo_checkout is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
+
+    - name: Download Go modules
+      ansible.builtin.command:
+        argv:
+          - go
+          - mod
+          - download
+      args:
+        chdir: "{{ reverse_logger_src_dir }}"
+      environment:
+        CGO_ENABLED: "0"
+      register: go_mod_download
+      changed_when: false
+      until: go_mod_download is succeeded
+      retries: "{{ nginx_edge_network_retries | int }}"
+      delay: "{{ nginx_edge_network_delay | int }}"
 
     - name: Build nginx-edge-forwarder
       ansible.builtin.command:
@@ -778,17 +1007,30 @@
         - nginx_edge_acme_http01_preflight_enabled | bool
 
     - name: Check HTTP-01 preflight challenge from control node
-      ansible.builtin.uri:
-        url: "http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token }}"
-        method: GET
-        return_content: true
-        status_code: 200
-        timeout: "{{ nginx_edge_acme_http01_preflight_timeout | int }}"
-      delegate_to: localhost
-      become: false
-      register: nginx_edge_acme_http01_preflight
-      changed_when: false
-      failed_when: false
+      block:
+        - name: Fetch HTTP-01 preflight challenge from control node
+          ansible.builtin.uri:
+            url: "http://{{ rssh_domain }}/.well-known/acme-challenge/{{ nginx_edge_acme_http01_preflight_token }}"
+            method: GET
+            return_content: true
+            status_code: 200
+            timeout: "{{ nginx_edge_acme_http01_preflight_timeout | int }}"
+          delegate_to: localhost
+          become: false
+          register: nginx_edge_acme_http01_preflight
+          changed_when: false
+          until: >-
+            (nginx_edge_acme_http01_preflight.status | default(0) | int) == 200
+            and (nginx_edge_acme_http01_preflight.content | default('') | trim) == nginx_edge_acme_http01_preflight_content
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+      rescue:
+        - name: Continue after HTTP-01 preflight failure
+          ansible.builtin.debug:
+            msg: >-
+              HTTP-01 preflight failed after retries; certbot HTTP-01 will be
+              skipped and DNS-01 fallback will run when configured.
+          changed_when: false
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
@@ -856,6 +1098,9 @@
           }}
       register: certbot_dns_issue
       changed_when: "(certbot_dns_issue.stdout + certbot_dns_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      until: certbot_dns_issue.rc == 0
+      retries: "{{ nginx_edge_acme_retries | int }}"
+      delay: "{{ nginx_edge_acme_delay | int }}"
       notify: Reload nginx
       when:
         - nginx_edge_acme_enabled | bool
@@ -911,6 +1156,9 @@
           }}
       register: certbot_dns_fallback_issue
       changed_when: "(certbot_dns_fallback_issue.stdout + certbot_dns_fallback_issue.stderr) is search('Successfully received certificate|Congratulations')"
+      until: certbot_dns_fallback_issue.rc == 0
+      retries: "{{ nginx_edge_acme_retries | int }}"
+      delay: "{{ nginx_edge_acme_delay | int }}"
       notify: Reload nginx
       when:
         - nginx_edge_acme_enabled | bool

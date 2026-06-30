@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add bounded retries and Snap Store preflight checks to Ansible VPS edge
+  deployment network tasks.
 - Add a main-observed source IP probe for Ansible VPS deployments and stop
   treating the VPS route source address as `VPS_INTERNAL_IP`.
 - Pass explicit dns-multi propagation settings for Timeweb DNS-01 ACME and

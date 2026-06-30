@@ -402,6 +402,37 @@ nginx_edge_acme_force_renewal: true
 
 Set it back to `false` after the migration.
 
+### Network retries and partial reruns
+
+The VPS playbook retries transient network operations with bounded backoff:
+package installs, backend reachability checks, optional source-IP probes, HTTP-01
+preflight checks, Snap Store operations, GitHub checkout, Go module downloads,
+and DNS-01 certbot runs.
+
+```yaml
+nginx_edge_network_retries: 5
+nginx_edge_network_delay: 10
+nginx_edge_snap_retries: 8
+nginx_edge_snap_delay: 20
+nginx_edge_acme_retries: 2
+nginx_edge_acme_delay: 30
+```
+
+Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
+are already installed. The playbook only checks `api.snapcraft.io` DNS before a
+missing snap must actually be installed, so a later run is not blocked by Snap
+Store DNS if the needed snaps are already present.
+
+To retry just Snap bootstrap after a Snap Store or DNS flake:
+
+```sh
+ansible-playbook vps-edge.yml --limit edge1 --tags snap
+```
+
+ACME retries are intentionally conservative because repeated real validation
+failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
+`80/tcp`, or DNS-provider credentials before increasing `nginx_edge_acme_retries`.
+
 ### Auto-derived per VPS
 
 | Variable | Source |
