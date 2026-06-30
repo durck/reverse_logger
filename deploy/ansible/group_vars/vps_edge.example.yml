@@ -4,6 +4,12 @@
 redirect_target: https://example.com
 
 reverse_logger_repo_update: true
+reverse_logger_go_min_version: "1.23"
+reverse_logger_go_toolchain: local
+reverse_logger_go_proxy: direct
+reverse_logger_go_sumdb: "off"
+reverse_logger_go_retries: 3
+reverse_logger_go_delay: 10
 
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232
@@ -52,8 +58,8 @@ nginx_edge_acme_http01_preflight_timeout: 10
 # package mirror, Snap Store, GitHub, and ACME API failures.
 nginx_edge_network_retries: 5
 nginx_edge_network_delay: 10
-nginx_edge_snap_retries: 8
-nginx_edge_snap_delay: 20
+nginx_edge_snap_retries: 4
+nginx_edge_snap_delay: 15
 nginx_edge_snap_refresh_core_after_install: true
 # Certbot installs through Snap first. If Snap Store remains unavailable after
 # retries, the playbook removes only Certbot snap artifacts created by this run

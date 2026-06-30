@@ -412,14 +412,35 @@ and DNS-01 certbot runs.
 ```yaml
 nginx_edge_network_retries: 5
 nginx_edge_network_delay: 10
-nginx_edge_snap_retries: 8
-nginx_edge_snap_delay: 20
+nginx_edge_snap_retries: 4
+nginx_edge_snap_delay: 15
 nginx_edge_certbot_install_method: snap
 nginx_edge_certbot_snap_fallback_to_pip: true
 nginx_edge_certbot_venv_path: /opt/certbot
 nginx_edge_acme_retries: 2
 nginx_edge_acme_delay: 30
 ```
+
+Snap retries are shorter than the generic network retry budget because a
+persistent Snap Store failure can fall back to the pip/venv Certbot path.
+
+The target-side Go build avoids Go's automatic toolchain download during
+deployment:
+
+```yaml
+reverse_logger_go_min_version: "1.23"
+reverse_logger_go_toolchain: local
+reverse_logger_go_proxy: direct
+reverse_logger_go_sumdb: "off"
+reverse_logger_go_retries: 3
+reverse_logger_go_delay: 10
+```
+
+`GOTOOLCHAIN=local` prevents `go mod download` from fetching a newer compiler
+from `proxy.golang.org` when target DNS is flaky. The module download uses the
+committed `go.sum`; set `reverse_logger_go_proxy` / `reverse_logger_go_sumdb`
+back to public Go defaults if the target environment should use the public Go
+proxy and checksum database.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a

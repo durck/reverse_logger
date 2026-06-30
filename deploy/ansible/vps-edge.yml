@@ -11,6 +11,12 @@
         reverse_logger_repo_version: "{{ reverse_logger_repo_version | default('main', true) }}"
         reverse_logger_repo_update: "{{ reverse_logger_repo_update | default(true) }}"
         reverse_logger_src_dir: "{{ reverse_logger_src_dir | default('/opt/reverse-logger', true) }}"
+        reverse_logger_go_min_version: "{{ reverse_logger_go_min_version | default('1.23', true) }}"
+        reverse_logger_go_toolchain: "{{ reverse_logger_go_toolchain | default('local', true) }}"
+        reverse_logger_go_proxy: "{{ reverse_logger_go_proxy | default('direct', true) }}"
+        reverse_logger_go_sumdb: "{{ reverse_logger_go_sumdb | default('off', true) }}"
+        reverse_logger_go_retries: "{{ reverse_logger_go_retries | default(3, true) }}"
+        reverse_logger_go_delay: "{{ reverse_logger_go_delay | default(10, true) }}"
         nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
         nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
         nginx_edge_log_path: "{{ nginx_edge_log_path | default('', true) }}"
@@ -43,8 +49,8 @@
         nginx_edge_acme_dns_multi_nameservers: "{{ nginx_edge_acme_dns_multi_nameservers | default('', true) }}"
         nginx_edge_network_retries: "{{ nginx_edge_network_retries | default(5, true) }}"
         nginx_edge_network_delay: "{{ nginx_edge_network_delay | default(10, true) }}"
-        nginx_edge_snap_retries: "{{ nginx_edge_snap_retries | default(8, true) }}"
-        nginx_edge_snap_delay: "{{ nginx_edge_snap_delay | default(20, true) }}"
+        nginx_edge_snap_retries: "{{ nginx_edge_snap_retries | default(4, true) }}"
+        nginx_edge_snap_delay: "{{ nginx_edge_snap_delay | default(15, true) }}"
         nginx_edge_snap_refresh_core_after_install: "{{ nginx_edge_snap_refresh_core_after_install | default(true) }}"
         nginx_edge_certbot_install_method: "{{ nginx_edge_certbot_install_method | default('snap', true) }}"
         nginx_edge_certbot_snap_fallback_to_pip: "{{ nginx_edge_certbot_snap_fallback_to_pip | default(true) }}"
@@ -897,6 +903,36 @@
       retries: "{{ nginx_edge_network_retries | int }}"
       delay: "{{ nginx_edge_network_delay | int }}"
 
+    - name: Check Go compiler version
+      ansible.builtin.command:
+        argv:
+          - go
+          - version
+      register: reverse_logger_go_version_cmd
+      changed_when: false
+
+    - name: Validate Go compiler version output
+      ansible.builtin.assert:
+        that:
+          - reverse_logger_go_version_cmd.stdout is search('^go version go[0-9]+\\.[0-9]+')
+        fail_msg: "Unexpected go version output: {{ reverse_logger_go_version_cmd.stdout }}"
+        quiet: true
+
+    - name: Derive Go compiler version
+      ansible.builtin.set_fact:
+        reverse_logger_go_detected_version: "{{ reverse_logger_go_version_cmd.stdout | regex_replace('^go version go([0-9]+\\.[0-9]+(?:\\.[0-9]+)?).*$', '\\1') }}"
+
+    - name: Validate Go compiler minimum version
+      ansible.builtin.assert:
+        that:
+          - reverse_logger_go_detected_version is version(reverse_logger_go_min_version, '>=')
+        fail_msg: >-
+          Installed Go {{ reverse_logger_go_detected_version }} is older than
+          required {{ reverse_logger_go_min_version }}. Install a newer Go on
+          the VPS before building reverse_logger, or lower
+          reverse_logger_go_min_version only if the source still supports it.
+        quiet: true
+
     - name: Download Go modules
       ansible.builtin.command:
         argv:
@@ -907,11 +943,14 @@
         chdir: "{{ reverse_logger_src_dir }}"
       environment:
         CGO_ENABLED: "0"
+        GOTOOLCHAIN: "{{ reverse_logger_go_toolchain }}"
+        GOPROXY: "{{ reverse_logger_go_proxy }}"
+        GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       register: go_mod_download
       changed_when: false
       until: go_mod_download is succeeded
-      retries: "{{ nginx_edge_network_retries | int }}"
-      delay: "{{ nginx_edge_network_delay | int }}"
+      retries: "{{ reverse_logger_go_retries | int }}"
+      delay: "{{ reverse_logger_go_delay | int }}"
 
     - name: Build nginx-edge-forwarder
       ansible.builtin.command:
@@ -928,6 +967,9 @@
         chdir: "{{ reverse_logger_src_dir }}"
       environment:
         CGO_ENABLED: "0"
+        GOTOOLCHAIN: "{{ reverse_logger_go_toolchain }}"
+        GOPROXY: "{{ reverse_logger_go_proxy }}"
+        GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       changed_when: false
 
     - name: Install nginx-edge-forwarder binary

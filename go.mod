@@ -1,6 +1,6 @@
 module github.com/durck/reverse_logger
 
-go 1.25
+go 1.23.0
 
 require modernc.org/sqlite v1.36.3
 
