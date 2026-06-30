@@ -449,6 +449,11 @@ are already installed. The playbook only checks `api.snapcraft.io` DNS before a
 missing snap must actually be installed, so a later run is not blocked by Snap
 Store DNS if the needed snaps are already present.
 
+Before entering the Snap or pip install paths, the playbook accepts an existing
+working `certbot` executable. For Timeweb DNS-01 it also checks that the
+`dns-multi` plugin is visible; otherwise the install path runs to add the
+missing plugin support.
+
 When Snap remains unavailable after all retries and
 `nginx_edge_certbot_snap_fallback_to_pip: true`, the playbook falls back to a
 Python virtualenv at `nginx_edge_certbot_venv_path`. It removes only Certbot

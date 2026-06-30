@@ -4,6 +4,8 @@
 
 - Add a pip virtualenv Certbot fallback when Snap Store setup fails during
   Ansible VPS edge deployment.
+- Skip Certbot install tasks on VPS edge reruns when an existing executable
+  already satisfies the selected ACME challenge requirements.
 - Reduce the default Snap retry budget now that Certbot can fall back to
   pip/venv.
 - Avoid Go auto-toolchain downloads during Ansible VPS edge builds and lower

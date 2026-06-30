@@ -311,6 +311,64 @@
       when: nginx_edge_acme_enabled | bool
       tags: always
 
+    - name: Check existing Certbot executable
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - --version
+      register: certbot_existing_version
+      changed_when: false
+      failed_when: false
+      when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+        - certbot
+
+    - name: Check existing Certbot plugins
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - plugins
+          - --text
+      register: certbot_existing_plugins
+      changed_when: false
+      failed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - (certbot_existing_version.rc | default(1) | int) == 0
+        - nginx_edge_dns_multi_required | default(false) | bool
+      tags:
+        - snap
+        - certbot
+
+    - name: Derive existing Certbot plugin output
+      ansible.builtin.set_fact:
+        nginx_edge_certbot_existing_plugins_output: >-
+          {%- if certbot_existing_plugins is defined -%}
+          {{ (certbot_existing_plugins.stdout | default('')) ~ '\n' ~ (certbot_existing_plugins.stderr | default('')) }}
+          {%- else -%}
+          {{ '' }}
+          {%- endif -%}
+      when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+        - certbot
+
+    - name: Derive whether existing Certbot can satisfy ACME requirements
+      ansible.builtin.set_fact:
+        nginx_edge_certbot_existing_satisfies_requirements: >-
+          {{
+            (certbot_existing_version.rc | default(1) | int) == 0
+            and (
+              not (nginx_edge_dns_multi_required | default(false) | bool)
+              or ((nginx_edge_certbot_existing_plugins_output | default('')) is search('dns-multi'))
+            )
+          }}
+      when: nginx_edge_acme_enabled | bool
+      tags:
+        - snap
+        - certbot
+
     - name: Validate production certificate paths
       ansible.builtin.assert:
         that:
@@ -380,6 +438,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -396,6 +455,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -412,6 +472,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -428,6 +489,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -440,6 +502,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -738,6 +801,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'snap'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -748,6 +812,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_install_method == 'pip'
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
@@ -836,6 +901,7 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_certbot_use_pip | default(false) | bool
+        - not (nginx_edge_certbot_existing_satisfies_requirements | default(false) | bool)
       tags:
         - snap
         - certbot
