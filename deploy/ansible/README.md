@@ -414,6 +414,9 @@ nginx_edge_network_retries: 5
 nginx_edge_network_delay: 10
 nginx_edge_snap_retries: 8
 nginx_edge_snap_delay: 20
+nginx_edge_certbot_install_method: snap
+nginx_edge_certbot_snap_fallback_to_pip: true
+nginx_edge_certbot_venv_path: /opt/certbot
 nginx_edge_acme_retries: 2
 nginx_edge_acme_delay: 30
 ```
@@ -423,7 +426,21 @@ are already installed. The playbook only checks `api.snapcraft.io` DNS before a
 missing snap must actually be installed, so a later run is not blocked by Snap
 Store DNS if the needed snaps are already present.
 
-To retry just Snap bootstrap after a Snap Store or DNS flake:
+When Snap remains unavailable after all retries and
+`nginx_edge_certbot_snap_fallback_to_pip: true`, the playbook falls back to a
+Python virtualenv at `nginx_edge_certbot_venv_path`. It removes only Certbot
+snap state created by the current run: `/usr/bin/certbot` when it points at
+`/snap/bin/certbot`, plus `certbot` / `certbot-dns-multi` snaps that were not
+installed before the run. It does not remove `snapd`, `core`, or unrelated snap
+packages.
+
+The pip fallback installs `certbot` and, only when Timeweb DNS-01 can be used,
+`certbot-dns-multi`. The effective `nginx_edge_certbot_pip_packages` list is
+derived by the playbook from the ACME mode and token availability. Both Snap and
+pip paths expose the same
+`/usr/bin/certbot` command, so the ACME issuance commands do not change.
+
+To retry just Certbot bootstrap after a Snap Store or DNS flake:
 
 ```sh
 ansible-playbook vps-edge.yml --limit edge1 --tags snap

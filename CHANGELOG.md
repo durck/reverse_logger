@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a pip virtualenv Certbot fallback when Snap Store setup fails during
+  Ansible VPS edge deployment.
 - Add bounded retries and Snap Store preflight checks to Ansible VPS edge
   deployment network tasks.
 - Add a main-observed source IP probe for Ansible VPS deployments and stop

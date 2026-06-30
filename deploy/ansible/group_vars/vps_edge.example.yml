@@ -55,6 +55,14 @@ nginx_edge_network_delay: 10
 nginx_edge_snap_retries: 8
 nginx_edge_snap_delay: 20
 nginx_edge_snap_refresh_core_after_install: true
+# Certbot installs through Snap first. If Snap Store remains unavailable after
+# retries, the playbook removes only Certbot snap artifacts created by this run
+# and installs Certbot in this virtualenv instead.
+nginx_edge_certbot_install_method: snap
+nginx_edge_certbot_snap_fallback_to_pip: true
+nginx_edge_certbot_venv_path: /opt/certbot
+# nginx_edge_certbot_pip_packages is derived by the playbook as certbot plus
+# certbot-dns-multi when Timeweb DNS-01 can be used.
 # Keep ACME retries conservative to avoid consuming Let's Encrypt failed
 # validation limits during real DNS or HTTP challenge misconfiguration.
 nginx_edge_acme_retries: 2

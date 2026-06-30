@@ -46,6 +46,9 @@
         nginx_edge_snap_retries: "{{ nginx_edge_snap_retries | default(8, true) }}"
         nginx_edge_snap_delay: "{{ nginx_edge_snap_delay | default(20, true) }}"
         nginx_edge_snap_refresh_core_after_install: "{{ nginx_edge_snap_refresh_core_after_install | default(true) }}"
+        nginx_edge_certbot_install_method: "{{ nginx_edge_certbot_install_method | default('snap', true) }}"
+        nginx_edge_certbot_snap_fallback_to_pip: "{{ nginx_edge_certbot_snap_fallback_to_pip | default(true) }}"
+        nginx_edge_certbot_venv_path: "{{ nginx_edge_certbot_venv_path | default('/opt/certbot', true) }}"
         nginx_edge_acme_retries: "{{ nginx_edge_acme_retries | default(2, true) }}"
         nginx_edge_acme_delay: "{{ nginx_edge_acme_delay | default(30, true) }}"
         tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/fullchain.pem', true) }}"
@@ -214,6 +217,7 @@
           - rssh_download_path_prefix != '/'
           - rssh_download_path_prefix[-1] != '/'
           - nginx_edge_acme_challenge in ['http-01', 'dns-timeweb']
+          - nginx_edge_certbot_install_method in ['snap', 'pip']
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: >-
           Fill deploy/ansible/group_vars/vps_edge.yml and per-host rssh_domain in
@@ -275,6 +279,32 @@
           )
       no_log: true
 
+    - name: Derive whether certbot-dns-multi is required
+      ansible.builtin.set_fact:
+        nginx_edge_dns_multi_required: >-
+          {{
+            nginx_edge_acme_challenge == 'dns-timeweb'
+            or (
+              nginx_edge_acme_challenge == 'http-01'
+              and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
+              and timewebcloud_auth_token is defined
+              and (timewebcloud_auth_token | default('', true) | length > 20)
+              and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
+            )
+          }}
+      when: nginx_edge_acme_enabled | bool
+      tags: always
+
+    - name: Derive Certbot pip package list
+      ansible.builtin.set_fact:
+        nginx_edge_certbot_pip_packages: >-
+          {{
+            ['certbot']
+            + ((nginx_edge_dns_multi_required | default(false) | bool) | ternary(['certbot-dns-multi'], []))
+          }}
+      when: nginx_edge_acme_enabled | bool
+      tags: always
+
     - name: Validate production certificate paths
       ansible.builtin.assert:
         that:
@@ -333,324 +363,476 @@
         - edge_forward_host is defined
         - edge_forward_host | length > 0
 
-    - name: Install snapd for Certbot
-      ansible.builtin.apt:
-        name: snapd
-        state: present
-        cache_valid_time: 3600
-      register: snapd_install
-      until: snapd_install is succeeded
-      retries: "{{ nginx_edge_network_retries | int }}"
-      delay: "{{ nginx_edge_network_delay | int }}"
-      when:
-        - ansible_facts['os_family'] == 'Debian'
-        - nginx_edge_acme_enabled | bool
-      tags:
-        - snap
-
-    - name: Enable snapd socket
-      ansible.builtin.systemd:
-        name: snapd.socket
-        enabled: true
-        state: started
-      when: nginx_edge_acme_enabled | bool
-      tags:
-        - snap
-
-    - name: Wait for snapd seed
+    - name: Check initial snapd availability before Certbot setup
       ansible.builtin.command:
         argv:
           - snap
-          - wait
-          - system
-          - seed.loaded
-      register: snap_seed_wait
+          - version
+      register: snapd_initial
       changed_when: false
-      until: snap_seed_wait.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
-      when: nginx_edge_acme_enabled | bool
+      failed_when: false
+      when:
+        - nginx_edge_acme_enabled | bool
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Check installed snap core
+    - name: Check initial snap core before Certbot setup
       ansible.builtin.command:
         argv:
           - snap
           - list
           - core
-      register: snap_core_list
+      register: snap_core_initial
       changed_when: false
       failed_when: false
-      when: nginx_edge_acme_enabled | bool
-      tags:
-        - snap
-
-    - name: Check Snap Store DNS before installing core
-      ansible.builtin.command:
-        argv:
-          - getent
-          - hosts
-          - api.snapcraft.io
-      register: snap_core_store_dns
-      changed_when: false
-      until: snap_core_store_dns.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
-        - (snap_core_list.rc | default(1) | int) != 0
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Install snap core
-      ansible.builtin.command:
-        argv:
-          - snap
-          - install
-          - core
-      register: snap_core_install
-      changed_when:
-        - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
-        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
-      failed_when:
-        - snap_core_install.rc != 0
-        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
-      until: >-
-        snap_core_install.rc == 0
-        or 'already installed' in (snap_core_install.stdout + snap_core_install.stderr)
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
-      when:
-        - nginx_edge_acme_enabled | bool
-        - (snap_core_list.rc | default(1) | int) != 0
-      tags:
-        - snap
-
-    - name: Refresh snap core
-      ansible.builtin.command:
-        argv:
-          - snap
-          - refresh
-          - core
-      register: snap_core_refresh
-      changed_when: false
-      until: snap_core_refresh.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
-      when:
-        - nginx_edge_acme_enabled | bool
-        - nginx_edge_snap_refresh_core_after_install | bool
-        - snap_core_install is defined
-        - not (snap_core_install.skipped | default(false) | bool)
-        - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
-        - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
-      tags:
-        - snap
-
-    - name: Check installed Certbot snap
+    - name: Check initial Certbot snap before Certbot setup
       ansible.builtin.command:
         argv:
           - snap
           - list
           - certbot
-      register: certbot_snap_list
+      register: certbot_snap_initial
       changed_when: false
       failed_when: false
-      when: nginx_edge_acme_enabled | bool
-      tags:
-        - snap
-
-    - name: Check Snap Store DNS before installing Certbot
-      ansible.builtin.command:
-        argv:
-          - getent
-          - hosts
-          - api.snapcraft.io
-      register: certbot_snap_store_dns
-      changed_when: false
-      until: certbot_snap_store_dns.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
-        - (certbot_snap_list.rc | default(1) | int) != 0
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Install Certbot snap
-      ansible.builtin.command:
-        argv:
-          - snap
-          - install
-          - --classic
-          - certbot
-      register: certbot_snap_install
-      changed_when:
-        - "'installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
-        - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
-      failed_when:
-        - certbot_snap_install.rc != 0
-        - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
-      until: >-
-        certbot_snap_install.rc == 0
-        or 'already installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
-      when:
-        - nginx_edge_acme_enabled | bool
-        - (certbot_snap_list.rc | default(1) | int) != 0
-      tags:
-        - snap
-
-    - name: Check installed certbot-dns-multi snap
+    - name: Check initial certbot-dns-multi snap before Certbot setup
       ansible.builtin.command:
         argv:
           - snap
           - list
           - certbot-dns-multi
-      register: certbot_dns_multi_list
+      register: certbot_dns_multi_snap_initial
       changed_when: false
       failed_when: false
       when:
         - nginx_edge_acme_enabled | bool
-        - >-
-          nginx_edge_acme_challenge == 'dns-timeweb'
-          or (
-            nginx_edge_acme_challenge == 'http-01'
-            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Check Snap Store DNS before installing certbot-dns-multi
-      ansible.builtin.command:
-        argv:
-          - getent
-          - hosts
-          - api.snapcraft.io
-      register: certbot_dns_multi_store_dns
-      changed_when: false
-      until: certbot_dns_multi_store_dns.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
+    - name: Check initial Certbot executable link
+      ansible.builtin.stat:
+        path: /usr/bin/certbot
+        follow: false
+      register: certbot_bin_initial
       when:
         - nginx_edge_acme_enabled | bool
-        - (certbot_dns_multi_list.rc | default(1) | int) != 0
-        - >-
-          nginx_edge_acme_challenge == 'dns-timeweb'
-          or (
-            nginx_edge_acme_challenge == 'http-01'
-            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Install certbot-dns-multi snap
-      ansible.builtin.command:
-        argv:
-          - snap
-          - install
-          - certbot-dns-multi
-      register: certbot_dns_multi_install
-      changed_when:
-        - "'installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
-        - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
-      failed_when:
-        - certbot_dns_multi_install.rc != 0
-        - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
-      until: >-
-        certbot_dns_multi_install.rc == 0
-        or 'already installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
+    - name: Install Certbot with snap
+      block:
+        - name: Install snapd for Certbot
+          ansible.builtin.apt:
+            name: snapd
+            state: present
+            cache_valid_time: 3600
+          register: snapd_install
+          until: snapd_install is succeeded
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+          when: ansible_facts['os_family'] == 'Debian'
+
+        - name: Enable snapd socket
+          ansible.builtin.systemd:
+            name: snapd.socket
+            enabled: true
+            state: started
+
+        - name: Wait for snapd seed
+          ansible.builtin.command:
+            argv:
+              - snap
+              - wait
+              - system
+              - seed.loaded
+          register: snap_seed_wait
+          changed_when: false
+          until: snap_seed_wait.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+
+        - name: Check installed snap core
+          ansible.builtin.command:
+            argv:
+              - snap
+              - list
+              - core
+          register: snap_core_list
+          changed_when: false
+          failed_when: false
+
+        - name: Check Snap Store DNS before installing core
+          ansible.builtin.command:
+            argv:
+              - getent
+              - hosts
+              - api.snapcraft.io
+          register: snap_core_store_dns
+          changed_when: false
+          until: snap_core_store_dns.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: (snap_core_list.rc | default(1) | int) != 0
+
+        - name: Install snap core
+          ansible.builtin.command:
+            argv:
+              - snap
+              - install
+              - core
+          register: snap_core_install
+          changed_when:
+            - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
+            - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+          failed_when:
+            - snap_core_install.rc != 0
+            - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+          until: >-
+            snap_core_install.rc == 0
+            or 'already installed' in (snap_core_install.stdout + snap_core_install.stderr)
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: (snap_core_list.rc | default(1) | int) != 0
+
+        - name: Refresh snap core
+          ansible.builtin.command:
+            argv:
+              - snap
+              - refresh
+              - core
+          register: snap_core_refresh
+          changed_when: false
+          until: snap_core_refresh.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when:
+            - nginx_edge_snap_refresh_core_after_install | bool
+            - snap_core_install is defined
+            - not (snap_core_install.skipped | default(false) | bool)
+            - "'installed' in (snap_core_install.stdout + snap_core_install.stderr)"
+            - "'already installed' not in (snap_core_install.stdout + snap_core_install.stderr)"
+
+        - name: Check installed Certbot snap
+          ansible.builtin.command:
+            argv:
+              - snap
+              - list
+              - certbot
+          register: certbot_snap_list
+          changed_when: false
+          failed_when: false
+
+        - name: Check Snap Store DNS before installing Certbot
+          ansible.builtin.command:
+            argv:
+              - getent
+              - hosts
+              - api.snapcraft.io
+          register: certbot_snap_store_dns
+          changed_when: false
+          until: certbot_snap_store_dns.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: (certbot_snap_list.rc | default(1) | int) != 0
+
+        - name: Install Certbot snap
+          ansible.builtin.command:
+            argv:
+              - snap
+              - install
+              - --classic
+              - certbot
+          register: certbot_snap_install
+          changed_when:
+            - "'installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+            - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+          failed_when:
+            - certbot_snap_install.rc != 0
+            - "'already installed' not in (certbot_snap_install.stdout + certbot_snap_install.stderr)"
+          until: >-
+            certbot_snap_install.rc == 0
+            or 'already installed' in (certbot_snap_install.stdout + certbot_snap_install.stderr)
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: (certbot_snap_list.rc | default(1) | int) != 0
+
+        - name: Check installed certbot-dns-multi snap
+          ansible.builtin.command:
+            argv:
+              - snap
+              - list
+              - certbot-dns-multi
+          register: certbot_dns_multi_list
+          changed_when: false
+          failed_when: false
+          when: nginx_edge_dns_multi_required | default(false) | bool
+
+        - name: Check Snap Store DNS before installing certbot-dns-multi
+          ansible.builtin.command:
+            argv:
+              - getent
+              - hosts
+              - api.snapcraft.io
+          register: certbot_dns_multi_store_dns
+          changed_when: false
+          until: certbot_dns_multi_store_dns.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when:
+            - nginx_edge_dns_multi_required | default(false) | bool
+            - (certbot_dns_multi_list.rc | default(1) | int) != 0
+
+        - name: Install certbot-dns-multi snap
+          ansible.builtin.command:
+            argv:
+              - snap
+              - install
+              - certbot-dns-multi
+          register: certbot_dns_multi_install
+          changed_when:
+            - "'installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+            - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+          failed_when:
+            - certbot_dns_multi_install.rc != 0
+            - "'already installed' not in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)"
+          until: >-
+            certbot_dns_multi_install.rc == 0
+            or 'already installed' in (certbot_dns_multi_install.stdout + certbot_dns_multi_install.stderr)
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when:
+            - nginx_edge_dns_multi_required | default(false) | bool
+            - (certbot_dns_multi_list.rc | default(1) | int) != 0
+
+        - name: Trust Certbot snap plugins with root
+          ansible.builtin.command:
+            argv:
+              - snap
+              - set
+              - certbot
+              - trust-plugin-with-root=ok
+          register: certbot_snap_trust_plugin
+          changed_when: false
+          until: certbot_snap_trust_plugin.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: nginx_edge_dns_multi_required | default(false) | bool
+
+        - name: Connect certbot-dns-multi plugin
+          ansible.builtin.command:
+            argv:
+              - snap
+              - connect
+              - certbot:plugin
+              - certbot-dns-multi
+          register: certbot_dns_multi_connect
+          changed_when: false
+          failed_when:
+            - certbot_dns_multi_connect.rc != 0
+            - "'already connected' not in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)"
+          until: >-
+            certbot_dns_multi_connect.rc == 0
+            or 'already connected' in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+          when: nginx_edge_dns_multi_required | default(false) | bool
+
+        - name: Link Certbot snap into /usr/bin
+          ansible.builtin.file:
+            src: /snap/bin/certbot
+            dest: /usr/bin/certbot
+            state: link
+            force: true
+
+        - name: Verify Certbot snap executable
+          ansible.builtin.command:
+            argv:
+              - certbot
+              - --version
+          register: certbot_snap_version
+          changed_when: false
+          until: certbot_snap_version.rc == 0
+          retries: "{{ nginx_edge_snap_retries | int }}"
+          delay: "{{ nginx_edge_snap_delay | int }}"
+      rescue:
+        - name: Fail when Snap Certbot fallback is disabled
+          ansible.builtin.fail:
+            msg: >-
+              Snap Certbot setup failed and
+              nginx_edge_certbot_snap_fallback_to_pip=false. Re-run with Snap
+              Store connectivity fixed or enable the pip fallback.
+          when: not (nginx_edge_certbot_snap_fallback_to_pip | bool)
+
+        - name: Mark Certbot pip fallback as active
+          ansible.builtin.set_fact:
+            nginx_edge_certbot_use_pip: true
+            nginx_edge_certbot_snap_failed: true
+          when: nginx_edge_certbot_snap_fallback_to_pip | bool
+
+        - name: Check Certbot executable link before pip fallback cleanup
+          ansible.builtin.stat:
+            path: /usr/bin/certbot
+            follow: false
+          register: certbot_bin_after_snap_failure
+          when: nginx_edge_certbot_snap_fallback_to_pip | bool
+
+        - name: Remove snap Certbot symlink before pip fallback
+          ansible.builtin.file:
+            path: /usr/bin/certbot
+            state: absent
+          when:
+            - nginx_edge_certbot_snap_fallback_to_pip | bool
+            - certbot_bin_after_snap_failure.stat.islnk | default(false)
+            - certbot_bin_after_snap_failure.stat.lnk_target | default('') == '/snap/bin/certbot'
+
+        - name: Remove playbook-created certbot-dns-multi snap before pip fallback
+          ansible.builtin.command:
+            argv:
+              - snap
+              - remove
+              - certbot-dns-multi
+          register: certbot_dns_multi_snap_cleanup
+          changed_when: certbot_dns_multi_snap_cleanup.rc == 0
+          failed_when: false
+          when:
+            - nginx_edge_certbot_snap_fallback_to_pip | bool
+            - (certbot_dns_multi_snap_initial.rc | default(1) | int) != 0
+
+        - name: Remove playbook-created Certbot snap before pip fallback
+          ansible.builtin.command:
+            argv:
+              - snap
+              - remove
+              - certbot
+          register: certbot_snap_cleanup
+          changed_when: certbot_snap_cleanup.rc == 0
+          failed_when: false
+          when:
+            - nginx_edge_certbot_snap_fallback_to_pip | bool
+            - (certbot_snap_initial.rc | default(1) | int) != 0
       when:
         - nginx_edge_acme_enabled | bool
-        - (certbot_dns_multi_list.rc | default(1) | int) != 0
-        - >-
-          nginx_edge_acme_challenge == 'dns-timeweb'
-          or (
-            nginx_edge_acme_challenge == 'http-01'
-            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
+        - nginx_edge_certbot_install_method == 'snap'
       tags:
         - snap
+        - certbot
 
-    - name: Trust Certbot snap plugins with root
-      ansible.builtin.command:
-        argv:
-          - snap
-          - set
-          - certbot
-          - trust-plugin-with-root=ok
-      register: certbot_snap_trust_plugin
-      changed_when: false
-      until: certbot_snap_trust_plugin.rc == 0
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
+    - name: Mark explicit Certbot pip install as active
+      ansible.builtin.set_fact:
+        nginx_edge_certbot_use_pip: true
       when:
         - nginx_edge_acme_enabled | bool
-        - >-
-          nginx_edge_acme_challenge == 'dns-timeweb'
-          or (
-            nginx_edge_acme_challenge == 'http-01'
-            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
+        - nginx_edge_certbot_install_method == 'pip'
       tags:
         - snap
+        - certbot
 
-    - name: Connect certbot-dns-multi plugin
-      ansible.builtin.command:
-        argv:
-          - snap
-          - connect
-          - certbot:plugin
-          - certbot-dns-multi
-      register: certbot_dns_multi_connect
-      changed_when: false
-      failed_when:
-        - certbot_dns_multi_connect.rc != 0
-        - "'already connected' not in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)"
-      until: >-
-        certbot_dns_multi_connect.rc == 0
-        or 'already connected' in (certbot_dns_multi_connect.stdout + certbot_dns_multi_connect.stderr)
-      retries: "{{ nginx_edge_snap_retries | int }}"
-      delay: "{{ nginx_edge_snap_delay | int }}"
+    - name: Install Certbot with pip fallback
+      block:
+        - name: Install Certbot pip prerequisites
+          ansible.builtin.apt:
+            name:
+              - python3
+              - python3-venv
+              - python3-pip
+            state: present
+            cache_valid_time: 3600
+          register: certbot_pip_prereqs
+          until: certbot_pip_prereqs is succeeded
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+          when: ansible_facts['os_family'] == 'Debian'
+
+        - name: Create Certbot venv parent directory
+          ansible.builtin.file:
+            path: "{{ nginx_edge_certbot_venv_path | dirname }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Create Certbot virtualenv
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -m
+              - venv
+              - "{{ nginx_edge_certbot_venv_path }}"
+          args:
+            creates: "{{ nginx_edge_certbot_venv_path }}/bin/python"
+
+        - name: Upgrade Certbot virtualenv packaging tools
+          ansible.builtin.command:
+            argv:
+              - "{{ nginx_edge_certbot_venv_path }}/bin/python"
+              - -m
+              - pip
+              - install
+              - --upgrade
+              - pip
+              - setuptools
+              - wheel
+          register: certbot_pip_tools_install
+          changed_when: "'Successfully installed' in (certbot_pip_tools_install.stdout + certbot_pip_tools_install.stderr)"
+          until: certbot_pip_tools_install is succeeded
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+
+        - name: Install Certbot pip packages
+          ansible.builtin.command:
+            argv: >-
+              {{
+                [nginx_edge_certbot_venv_path ~ '/bin/python', '-m', 'pip', 'install', '--upgrade']
+                + nginx_edge_certbot_pip_packages
+              }}
+          register: certbot_pip_package_install
+          changed_when: "'Successfully installed' in (certbot_pip_package_install.stdout + certbot_pip_package_install.stderr)"
+          until: certbot_pip_package_install is succeeded
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+
+        - name: Link Certbot pip executable into /usr/bin
+          ansible.builtin.file:
+            src: "{{ nginx_edge_certbot_venv_path }}/bin/certbot"
+            dest: /usr/bin/certbot
+            state: link
+            force: true
+
+        - name: Verify Certbot pip executable
+          ansible.builtin.command:
+            argv:
+              - certbot
+              - --version
+          register: certbot_pip_version
+          changed_when: false
+          until: certbot_pip_version.rc == 0
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
       when:
         - nginx_edge_acme_enabled | bool
-        - >-
-          nginx_edge_acme_challenge == 'dns-timeweb'
-          or (
-            nginx_edge_acme_challenge == 'http-01'
-            and nginx_edge_acme_http01_fallback_to_dns_timeweb | bool
-            and timewebcloud_auth_token is defined
-            and (timewebcloud_auth_token | default('', true) | length > 20)
-            and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN'
-          )
+        - nginx_edge_certbot_use_pip | default(false) | bool
       tags:
         - snap
-
-    - name: Link Certbot into /usr/bin
-      ansible.builtin.file:
-        src: /snap/bin/certbot
-        dest: /usr/bin/certbot
-        state: link
-        force: true
-      when: nginx_edge_acme_enabled | bool
-      tags:
-        - snap
+        - certbot
 
     - name: Create Let's Encrypt configuration directory
       ansible.builtin.file:
