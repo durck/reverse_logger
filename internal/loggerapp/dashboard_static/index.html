@@ -452,9 +452,11 @@
               <th style="width: 132px;">Correlation</th>
               <th style="width: 130px;">Transport</th>
               <th style="width: 180px;">Host</th>
+              <th style="width: 180px;">Domain</th>
               <th style="width: 150px;">Client IP</th>
               <th style="width: 150px;">Seen IP</th>
               <th style="width: 150px;">VPS</th>
+              <th style="width: 150px;">VPS IP</th>
               <th style="width: 220px;">ID</th>
             </tr>
           </thead>
@@ -602,9 +604,11 @@
           pillCell(event.correlation_status),
           cell((event.transport || "-").toUpperCase()),
           cell(event.host_name || event.computer_name || "-"),
+          cell(event.ingress_host || "-", "mono"),
           cell(event.real_client_ip || "-", "mono"),
           cell(event.ip_addr || event.ip_raw || "-", "mono"),
           cell(event.vps_name || event.forwarder_ip || "-", "mono"),
+          cell(vpsIP(event), "mono"),
           cell(event.reverse_ssh_id || "-", "mono")
         );
         body.appendChild(row);
@@ -627,6 +631,10 @@
       span.textContent = name;
       td.appendChild(span);
       return td;
+    }
+
+    function vpsIP(event) {
+      return event.vps_public_ip || event.forwarder_ip || event.vps_internal_ip || "-";
     }
 
     function formatTime(value) {

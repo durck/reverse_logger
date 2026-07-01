@@ -71,6 +71,7 @@ type DashboardEvent struct {
 	VPSPublicIP          string `json:"vps_public_ip,omitempty"`
 	VPSInternalIP        string `json:"vps_internal_ip,omitempty"`
 	ForwarderIP          string `json:"forwarder_ip,omitempty"`
+	IngressHost          string `json:"ingress_host,omitempty"`
 	Version              string `json:"version,omitempty"`
 	ReceivedAt           string `json:"received_at"`
 	IngressReceivedAt    string `json:"ingress_received_at,omitempty"`
@@ -133,11 +134,11 @@ func (s *Store) DashboardEvents(ctx context.Context, query DashboardEventQuery) 
 	limit := normalizeDashboardLimit(query.Limit)
 
 	args := []any{bounds.since, bounds.until}
-	conditions := []string{"received_at BETWEEN ? AND ?"}
+	conditions := []string{"ee.received_at BETWEEN ? AND ?"}
 	for column, value := range map[string]string{
-		"status":             strings.ToLower(strings.TrimSpace(query.Status)),
-		"correlation_status": strings.ToLower(strings.TrimSpace(query.CorrelationStatus)),
-		"transport":          strings.ToLower(strings.TrimSpace(query.Transport)),
+		"ee.status":             strings.ToLower(strings.TrimSpace(query.Status)),
+		"ee.correlation_status": strings.ToLower(strings.TrimSpace(query.CorrelationStatus)),
+		"ee.transport":          strings.ToLower(strings.TrimSpace(query.Transport)),
 	} {
 		if value == "" {
 			continue
@@ -149,34 +150,36 @@ func (s *Store) DashboardEvents(ctx context.Context, query DashboardEventQuery) 
 	if search := strings.ToLower(strings.TrimSpace(query.Search)); search != "" {
 		like := "%" + search + "%"
 		conditions = append(conditions, `(
-			lower(coalesce(reverse_ssh_id, '')) LIKE ?
-			OR lower(coalesce(host_name, '')) LIKE ?
-			OR lower(coalesce(user_name, '')) LIKE ?
-			OR lower(coalesce(computer_name, '')) LIKE ?
-			OR lower(coalesce(ip_raw, '')) LIKE ?
-			OR lower(coalesce(ip_addr, '')) LIKE ?
-			OR lower(coalesce(real_client_ip, '')) LIKE ?
-			OR lower(coalesce(proxy_source_ip, '')) LIKE ?
-			OR lower(coalesce(vps_name, '')) LIKE ?
-			OR lower(coalesce(vps_public_ip, '')) LIKE ?
-			OR lower(coalesce(vps_internal_ip, '')) LIKE ?
-			OR lower(coalesce(forwarder_ip, '')) LIKE ?
+			lower(coalesce(ee.reverse_ssh_id, '')) LIKE ?
+			OR lower(coalesce(ee.host_name, '')) LIKE ?
+			OR lower(coalesce(ee.user_name, '')) LIKE ?
+			OR lower(coalesce(ee.computer_name, '')) LIKE ?
+			OR lower(coalesce(ee.ip_raw, '')) LIKE ?
+			OR lower(coalesce(ee.ip_addr, '')) LIKE ?
+			OR lower(coalesce(ee.real_client_ip, '')) LIKE ?
+			OR lower(coalesce(ee.proxy_source_ip, '')) LIKE ?
+			OR lower(coalesce(ee.vps_name, '')) LIKE ?
+			OR lower(coalesce(ee.vps_public_ip, '')) LIKE ?
+			OR lower(coalesce(ee.vps_internal_ip, '')) LIKE ?
+			OR lower(coalesce(ee.forwarder_ip, '')) LIKE ?
+			OR lower(coalesce(ie.host, '')) LIKE ?
 		)`)
-		for i := 0; i < 12; i++ {
+		for i := 0; i < 13; i++ {
 			args = append(args, like)
 		}
 	}
 
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, status, correlation_status, correlation_method, reverse_ssh_id,
-	host_name, user_name, computer_name, ip_raw, ip_addr, ip_port,
-	real_client_ip, client_port, transport, public_key_fingerprint,
-	proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip, forwarder_ip,
-	version, received_at, ingress_received_at
-FROM enriched_events
+SELECT ee.id, ee.status, ee.correlation_status, ee.correlation_method, ee.reverse_ssh_id,
+	ee.host_name, ee.user_name, ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port,
+	ee.real_client_ip, ee.client_port, ee.transport, ee.public_key_fingerprint,
+	ee.proxy_source_ip, ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip,
+	ee.forwarder_ip, ie.host, ee.version, ee.received_at, ee.ingress_received_at
+FROM enriched_events ee
+LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
 WHERE `+strings.Join(conditions, " AND ")+`
-ORDER BY received_at DESC, id DESC
+ORDER BY ee.received_at DESC, ee.id DESC
 LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -367,7 +370,7 @@ func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 	var event DashboardEvent
 	var correlationMethod, reverseSSHID, hostName, userName, computerName sql.NullString
 	var ipRaw, ipAddr, realClientIP, transport, publicKeyFingerprint sql.NullString
-	var proxySourceIP, vpsName, vpsPublicIP, vpsInternalIP, forwarderIP sql.NullString
+	var proxySourceIP, vpsName, vpsPublicIP, vpsInternalIP, forwarderIP, ingressHost sql.NullString
 	var version, ingressReceivedAt sql.NullString
 	var ipPort, clientPort sql.NullInt64
 	if err := row.Scan(
@@ -391,6 +394,7 @@ func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 		&vpsPublicIP,
 		&vpsInternalIP,
 		&forwarderIP,
+		&ingressHost,
 		&version,
 		&event.ReceivedAt,
 		&ingressReceivedAt,
@@ -418,6 +422,7 @@ func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 	event.VPSPublicIP = vpsPublicIP.String
 	event.VPSInternalIP = vpsInternalIP.String
 	event.ForwarderIP = forwarderIP.String
+	event.IngressHost = ingressHost.String
 	event.Version = version.String
 	event.IngressReceivedAt = ingressReceivedAt.String
 	return event, nil

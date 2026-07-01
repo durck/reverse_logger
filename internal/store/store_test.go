@@ -187,9 +187,9 @@ func TestDashboardOverviewSummarizesEnrichedEvents(t *testing.T) {
 	defer st.Close()
 
 	now := time.Now().UTC()
-	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-30*time.Minute))
-	seedDashboardEnriched(t, st, "two", "disconnected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-25*time.Minute))
-	seedDashboardEnriched(t, st, "three", "connected", "unmatched", "https", "edge-2", "bob.laptop", "", now.Add(-20*time.Minute))
+	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-30*time.Minute))
+	seedDashboardEnriched(t, st, "two", "disconnected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-25*time.Minute))
+	seedDashboardEnriched(t, st, "three", "connected", "unmatched", "https", "edge-2", "bob.laptop", "", "203.0.113.20", "edge2.example.com", now.Add(-20*time.Minute))
 
 	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
 	if err != nil {
@@ -217,15 +217,15 @@ func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 	defer st.Close()
 
 	now := time.Now().UTC()
-	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-30*time.Minute))
-	seedDashboardEnriched(t, st, "two", "connected", "unmatched", "https", "edge-2", "bob.laptop", "203.0.113.10", now.Add(-20*time.Minute))
+	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-30*time.Minute))
+	seedDashboardEnriched(t, st, "two", "connected", "unmatched", "https", "edge-2", "bob.laptop", "203.0.113.10", "203.0.113.20", "edge2.example.com", now.Add(-20*time.Minute))
 
 	events, err := st.DashboardEvents(context.Background(), DashboardEventQuery{
 		Window:            24 * time.Hour,
 		Status:            "connected",
 		CorrelationStatus: "matched",
 		Transport:         "wss",
-		Search:            "alice",
+		Search:            "edge1.example.com",
 		Limit:             10,
 	})
 	if err != nil {
@@ -237,18 +237,47 @@ func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 	if events[0].HostName != "alice.workstation" || events[0].RealClientIP != "198.51.100.10" {
 		t.Fatalf("unexpected event: %+v", events[0])
 	}
+	if events[0].VPSPublicIP != "203.0.113.10" || events[0].IngressHost != "edge1.example.com" {
+		t.Fatalf("unexpected event: %+v", events[0])
+	}
 }
 
-func seedDashboardEnriched(t *testing.T, st *Store, suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP string, receivedAt time.Time) {
+func seedDashboardEnriched(t *testing.T, st *Store, suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP, vpsPublicIP, ingressHost string, receivedAt time.Time) {
 	t.Helper()
+	ingressHash := "dashboard-ingress-" + suffix
 	_, err := st.db.Exec(`
+INSERT INTO ingress_events (
+	event_hash, transport, vps_name, vps_public_ip, vps_internal_ip,
+	client_ip, client_port, host, uri, method, upgrade_header,
+	nginx_received_at, forwarded_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ingressHash,
+		transport,
+		vpsName,
+		vpsPublicIP,
+		"10.21.125.98",
+		realClientIP,
+		5555,
+		ingressHost,
+		"/ws",
+		"GET",
+		"websocket",
+		receivedAt.UTC().Format(time.RFC3339Nano),
+		receivedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.db.Exec(`
 INSERT INTO enriched_events (
-	event_hash, source_event_hash, correlation_status, correlation_method,
+	event_hash, source_event_hash, ingress_event_hash, correlation_status, correlation_method,
 	status, reverse_ssh_id, host_name, user_name, computer_name, ip_raw,
-	ip_addr, real_client_ip, transport, vps_name, received_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	ip_addr, real_client_ip, transport, vps_name, vps_public_ip,
+	vps_internal_ip, forwarder_ip, received_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"dashboard-event-"+suffix,
 		"dashboard-source-"+suffix,
+		ingressHash,
 		correlationStatus,
 		"test",
 		status,
@@ -261,6 +290,9 @@ INSERT INTO enriched_events (
 		realClientIP,
 		transport,
 		vpsName,
+		vpsPublicIP,
+		"10.21.125.98",
+		"10.21.125.98",
 		receivedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
