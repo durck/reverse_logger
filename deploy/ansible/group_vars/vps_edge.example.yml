@@ -28,6 +28,8 @@ reverse_logger_go_download_poll_interval: 5
 nginx_edge_fix_resolv_conf: true
 nginx_edge_resolv_conf_source: /run/systemd/resolve/resolv.conf
 
+# Main address reachable from VPS edges. When edge forwarding is enabled, main
+# .env should publish rssh-logger with LOGGER_BIND_IP set to this address.
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232
 main_logger_port: 8080

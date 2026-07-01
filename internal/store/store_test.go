@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,6 +158,123 @@ INSERT INTO ingress_events (
 	if enriched.CorrelationStatus != "matched" {
 		t.Fatalf("correlation_status = %q", enriched.CorrelationStatus)
 	}
+}
+
+func TestDashboardOverviewEmptyStoreReturnsZeroSummary(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Total != 0 || overview.Totals.Matched != 0 || overview.Totals.Unmatched != 0 {
+		t.Fatalf("unexpected totals: %+v", overview.Totals)
+	}
+	if len(overview.Timeline) == 0 {
+		t.Fatal("expected zero-filled timeline")
+	}
+}
+
+func TestDashboardOverviewSummarizesEnrichedEvents(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-30*time.Minute))
+	seedDashboardEnriched(t, st, "two", "disconnected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-25*time.Minute))
+	seedDashboardEnriched(t, st, "three", "connected", "unmatched", "https", "edge-2", "bob.laptop", "", now.Add(-20*time.Minute))
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Total != 3 || overview.Totals.Connected != 2 || overview.Totals.Disconnected != 1 {
+		t.Fatalf("unexpected status totals: %+v", overview.Totals)
+	}
+	if overview.Totals.Matched != 2 || overview.Totals.Unmatched != 1 || overview.Totals.Ambiguous != 0 {
+		t.Fatalf("unexpected correlation totals: %+v", overview.Totals)
+	}
+	if countForName(overview.ByTransport, "wss") != 2 || countForName(overview.ByTransport, "https") != 1 {
+		t.Fatalf("unexpected transport counts: %+v", overview.ByTransport)
+	}
+	if countForName(overview.ByVPS, "edge-1") != 2 || countForName(overview.ByVPS, "edge-2") != 1 {
+		t.Fatalf("unexpected vps counts: %+v", overview.ByVPS)
+	}
+}
+
+func TestDashboardEventsFiltersAndSearches(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	seedDashboardEnriched(t, st, "one", "connected", "matched", "wss", "edge-1", "alice.workstation", "198.51.100.10", now.Add(-30*time.Minute))
+	seedDashboardEnriched(t, st, "two", "connected", "unmatched", "https", "edge-2", "bob.laptop", "203.0.113.10", now.Add(-20*time.Minute))
+
+	events, err := st.DashboardEvents(context.Background(), DashboardEventQuery{
+		Window:            24 * time.Hour,
+		Status:            "connected",
+		CorrelationStatus: "matched",
+		Transport:         "wss",
+		Search:            "alice",
+		Limit:             10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events length = %d, events=%+v", len(events), events)
+	}
+	if events[0].HostName != "alice.workstation" || events[0].RealClientIP != "198.51.100.10" {
+		t.Fatalf("unexpected event: %+v", events[0])
+	}
+}
+
+func seedDashboardEnriched(t *testing.T, st *Store, suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP string, receivedAt time.Time) {
+	t.Helper()
+	_, err := st.db.Exec(`
+INSERT INTO enriched_events (
+	event_hash, source_event_hash, correlation_status, correlation_method,
+	status, reverse_ssh_id, host_name, user_name, computer_name, ip_raw,
+	ip_addr, real_client_ip, transport, vps_name, received_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"dashboard-event-"+suffix,
+		"dashboard-source-"+suffix,
+		correlationStatus,
+		"test",
+		status,
+		"client-"+suffix,
+		hostName,
+		"operator",
+		hostName,
+		"192.0.2.10:5000",
+		"192.0.2.10",
+		realClientIP,
+		transport,
+		vpsName,
+		receivedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func countForName(counts []DashboardCount, name string) int {
+	for _, count := range counts {
+		if count.Name == name {
+			return count.Count
+		}
+	}
+	return 0
 }
 
 func countLines(content []byte) int {

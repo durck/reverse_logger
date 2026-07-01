@@ -19,6 +19,7 @@ import (
 type Server struct {
 	webhookToken     string
 	edgeForwardToken string
+	dashboardToken   string
 	ingressWSPath    string
 	ingressPushPath  string
 	store            *store.Store
@@ -30,9 +31,14 @@ func NewServer(webhookToken, edgeForwardToken string, store *store.Store, telegr
 }
 
 func NewServerWithIngressPaths(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client, ingressWSPath, ingressPushPath string) *Server {
+	return NewServerWithDashboardToken(webhookToken, edgeForwardToken, store, telegramClient, ingressWSPath, ingressPushPath, "")
+}
+
+func NewServerWithDashboardToken(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client, ingressWSPath, ingressPushPath, dashboardToken string) *Server {
 	return &Server{
 		webhookToken:     webhookToken,
 		edgeForwardToken: edgeForwardToken,
+		dashboardToken:   strings.TrimSpace(dashboardToken),
 		ingressWSPath:    events.NormalizeIngressPath(ingressWSPath, events.DefaultWSPath),
 		ingressPushPath:  events.NormalizeIngressPath(ingressPushPath, events.DefaultPushPath),
 		store:            store,
@@ -48,6 +54,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/edge/source-ip", s.handleSourceIP)
 	mux.HandleFunc("/edge/source-ip/", s.handleSourceIP)
 	mux.HandleFunc("/ingress-events/", s.handleIngressEvent)
+	mux.HandleFunc("/dashboard", s.handleDashboardRoot)
+	mux.HandleFunc("/dashboard/api/overview", s.handleDashboardOverview)
+	mux.HandleFunc("/dashboard/api/events", s.handleDashboardEvents)
+	mux.HandleFunc("/dashboard/", s.handleDashboardPage)
 	return mux
 }
 

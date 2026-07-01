@@ -7,7 +7,8 @@ set -eu
 #
 # Docker-published ports are filtered in FORWARD, not only INPUT. This script
 # installs one guard chain and attaches it to both INPUT and DOCKER-USER when
-# Docker is present.
+# Docker is present. Logger/dashboard rules use LOGGER_BIND_IP when it is set;
+# otherwise they fall back to REVERSE_SSH_BIND_IP.
 
 : "${INGRESS_IFACE:?set INGRESS_IFACE, for example eth0 or ens18}"
 : "${REVERSE_SSH_BIND_IP:?set REVERSE_SSH_BIND_IP, for example 192.0.2.10}"
@@ -15,6 +16,7 @@ set -eu
 
 GUARD_CHAIN="${GUARD_CHAIN:-RSSH_INGRESS_GUARD}"
 LOGGER_PORT="${LOGGER_BIND_PORT:-}"
+LOGGER_IP="${LOGGER_BIND_IP:-$REVERSE_SSH_BIND_IP}"
 ALLOWED_SOURCES="${ALLOWED_SOURCE_IPS:-}"
 
 command -v iptables >/dev/null
@@ -37,11 +39,11 @@ allow_target_from_source() {
   fi
   if [ "$LOGGER_PORT" ]; then
     if [ "$source_ip" ]; then
-      iptables -A "$GUARD_CHAIN" -p tcp -s "$source_ip" -d "$REVERSE_SSH_BIND_IP" --dport "$LOGGER_PORT" -j RETURN
-      iptables -A "$GUARD_CHAIN" -p tcp -s "$source_ip" -m conntrack --ctorigdst "$REVERSE_SSH_BIND_IP" --ctorigdstport "$LOGGER_PORT" -j RETURN
+      iptables -A "$GUARD_CHAIN" -p tcp -s "$source_ip" -d "$LOGGER_IP" --dport "$LOGGER_PORT" -j RETURN
+      iptables -A "$GUARD_CHAIN" -p tcp -s "$source_ip" -m conntrack --ctorigdst "$LOGGER_IP" --ctorigdstport "$LOGGER_PORT" -j RETURN
     else
-      iptables -A "$GUARD_CHAIN" -p tcp -d "$REVERSE_SSH_BIND_IP" --dport "$LOGGER_PORT" -j RETURN
-      iptables -A "$GUARD_CHAIN" -p tcp -m conntrack --ctorigdst "$REVERSE_SSH_BIND_IP" --ctorigdstport "$LOGGER_PORT" -j RETURN
+      iptables -A "$GUARD_CHAIN" -p tcp -d "$LOGGER_IP" --dport "$LOGGER_PORT" -j RETURN
+      iptables -A "$GUARD_CHAIN" -p tcp -m conntrack --ctorigdst "$LOGGER_IP" --ctorigdstport "$LOGGER_PORT" -j RETURN
     fi
   fi
 }

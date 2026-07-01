@@ -1,5 +1,6 @@
-# Optional override. Use only if VPS edge-loggers must POST edge_events into
-# the central logger over the private/internal bind IP.
+# Optional override. Use when VPS edge forwarders must POST ingress events into
+# the central logger, or when the dashboard should be reachable on a host
+# interface protected by firewall allowlists.
 #
 # Start with:
 # docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
@@ -7,4 +8,4 @@
 services:
   rssh-logger:
     ports:
-      - "${REVERSE_SSH_BIND_IP:?set REVERSE_SSH_BIND_IP in .env}:${LOGGER_BIND_PORT:-8080}:8080"
+      - "${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}:8080"

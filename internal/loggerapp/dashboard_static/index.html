@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>reverse_ssh journal</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1d2430;
+      --muted: #667085;
+      --border: #d9dee7;
+      --line: #eef1f5;
+      --accent: #087f8c;
+      --accent-soft: #d9f0f2;
+      --ok: #218358;
+      --warn: #b7791f;
+      --bad: #b42318;
+      --unknown: #667085;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1440px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 20px 0 28px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 4px 0 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .statusline {
+      color: var(--muted);
+      min-height: 20px;
+      text-align: right;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: 120px 150px 170px 130px minmax(220px, 1fr) 110px;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .control,
+    .button {
+      height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 12px;
+      min-width: 0;
+    }
+
+    .button {
+      cursor: pointer;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+      font-weight: 650;
+    }
+
+    .button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .metric,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      min-height: 92px;
+      padding: 14px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 30px;
+      font-weight: 760;
+      line-height: 1;
+    }
+
+    .metric .sub {
+      margin-top: 8px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .panel {
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 52px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .panel-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .timeline {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 230px;
+      padding: 16px 14px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .bar {
+      flex: 1 1 0;
+      min-width: 4px;
+      height: 2px;
+      border-radius: 4px 4px 0 0;
+      background: var(--accent);
+    }
+
+    .bar.zero {
+      background: #d5dbe4;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 10px 14px 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      margin-right: 6px;
+      vertical-align: 1px;
+      background: var(--accent);
+    }
+
+    .dot.ok {
+      background: var(--ok);
+    }
+
+    .dot.warn {
+      background: var(--warn);
+    }
+
+    .dot.bad {
+      background: var(--bad);
+    }
+
+    .breakdowns {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
+    }
+
+    .breakdown-title {
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .rank-row {
+      display: grid;
+      grid-template-columns: minmax(90px, 1fr) 42px;
+      gap: 8px;
+      align-items: center;
+      min-height: 28px;
+    }
+
+    .rank-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .rank-count {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
+
+    .rank-track {
+      grid-column: 1 / -1;
+      height: 6px;
+      background: var(--line);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .rank-fill {
+      height: 100%;
+      width: 0;
+      background: var(--accent);
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 1080px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: #fbfcfd;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      min-height: 24px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #edf1f6;
+      color: #344054;
+      font-weight: 650;
+      font-size: 12px;
+    }
+
+    .pill.connected,
+    .pill.matched {
+      background: #dcf4e8;
+      color: #176344;
+    }
+
+    .pill.disconnected,
+    .pill.ambiguous {
+      background: #fff1d6;
+      color: #8a570f;
+    }
+
+    .pill.unmatched {
+      background: #fde7e4;
+      color: #9a2219;
+    }
+
+    .empty {
+      padding: 32px 14px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        width: min(100vw - 20px, 760px);
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .statusline {
+        text-align: left;
+      }
+
+      .controls,
+      .metrics,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .metric {
+        min-height: 78px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <h1>reverse_ssh journal</h1>
+      <div id="statusline" class="statusline">Loading</div>
+    </header>
+
+    <section class="controls" aria-label="Filters">
+      <select id="window" class="control" aria-label="Window">
+        <option value="24h">24h</option>
+        <option value="7d">7d</option>
+        <option value="30d">30d</option>
+      </select>
+      <select id="status" class="control" aria-label="Status">
+        <option value="">All statuses</option>
+        <option value="connected">Connected</option>
+        <option value="disconnected">Disconnected</option>
+      </select>
+      <select id="correlation" class="control" aria-label="Correlation">
+        <option value="">All correlation</option>
+        <option value="matched">Matched</option>
+        <option value="unmatched">Unmatched</option>
+        <option value="ambiguous">Ambiguous</option>
+      </select>
+      <select id="transport" class="control" aria-label="Transport">
+        <option value="">All transports</option>
+        <option value="wss">WSS</option>
+        <option value="https">HTTPS</option>
+      </select>
+      <input id="search" class="control" type="search" placeholder="Search host, IP, ID, VPS" aria-label="Search">
+      <button id="refresh" class="button" type="button">Refresh</button>
+    </section>
+
+    <section class="metrics" aria-label="Summary">
+      <div class="metric"><div class="label">Total</div><div id="metric-total" class="value">0</div><div class="sub" id="metric-window">24h</div></div>
+      <div class="metric"><div class="label">Connected</div><div id="metric-connected" class="value">0</div><div class="sub">session opens</div></div>
+      <div class="metric"><div class="label">Disconnected</div><div id="metric-disconnected" class="value">0</div><div class="sub">session closes</div></div>
+      <div class="metric"><div class="label">Matched</div><div id="metric-matched" class="value">0</div><div class="sub">ingress linked</div></div>
+      <div class="metric"><div class="label">Unmatched</div><div id="metric-unmatched" class="value">0</div><div class="sub">needs review</div></div>
+      <div class="metric"><div class="label">Ambiguous</div><div id="metric-ambiguous" class="value">0</div><div class="sub">multiple candidates</div></div>
+    </section>
+
+    <section class="grid">
+      <section class="panel" aria-label="Timeline">
+        <div class="panel-head">
+          <div class="panel-title">Timeline</div>
+          <div id="timeline-range" class="panel-subtitle"></div>
+        </div>
+        <div id="timeline" class="timeline"></div>
+        <div class="legend">
+          <span><span class="dot"></span>Total events</span>
+          <span><span class="dot ok"></span>Matched</span>
+          <span><span class="dot bad"></span>Unmatched</span>
+          <span><span class="dot warn"></span>Ambiguous</span>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Breakdowns">
+        <div class="panel-head">
+          <div class="panel-title">Breakdowns</div>
+          <div class="panel-subtitle">Top values</div>
+        </div>
+        <div class="breakdowns">
+          <div><div class="breakdown-title">Correlation</div><div id="by-correlation"></div></div>
+          <div><div class="breakdown-title">Transport</div><div id="by-transport"></div></div>
+          <div><div class="breakdown-title">VPS</div><div id="by-vps"></div></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel" aria-label="Recent sessions">
+      <div class="panel-head">
+        <div class="panel-title">Recent sessions</div>
+        <div id="event-count" class="panel-subtitle"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 168px;">Received</th>
+              <th style="width: 116px;">Status</th>
+              <th style="width: 132px;">Correlation</th>
+              <th style="width: 130px;">Transport</th>
+              <th style="width: 180px;">Host</th>
+              <th style="width: 150px;">Client IP</th>
+              <th style="width: 150px;">Seen IP</th>
+              <th style="width: 150px;">VPS</th>
+              <th style="width: 220px;">ID</th>
+            </tr>
+          </thead>
+          <tbody id="events-body"></tbody>
+        </table>
+        <div id="events-empty" class="empty" hidden>No events</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+    const controls = {
+      window: el("window"),
+      status: el("status"),
+      correlation: el("correlation"),
+      transport: el("transport"),
+      search: el("search"),
+      refresh: el("refresh")
+    };
+    let searchTimer = 0;
+
+    function text(id, value) {
+      el(id).textContent = value == null || value === "" ? "-" : String(value);
+    }
+
+    function params(includeFilters) {
+      const p = new URLSearchParams();
+      p.set("window", controls.window.value);
+      if (includeFilters) {
+        if (controls.status.value) p.set("status", controls.status.value);
+        if (controls.correlation.value) p.set("correlation_status", controls.correlation.value);
+        if (controls.transport.value) p.set("transport", controls.transport.value);
+        if (controls.search.value.trim()) p.set("q", controls.search.value.trim());
+        p.set("limit", "100");
+      }
+      return p;
+    }
+
+    async function fetchJSON(url) {
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        headers: { "Accept": "application/json" },
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    }
+
+    async function loadAll() {
+      controls.refresh.disabled = true;
+      text("statusline", "Loading");
+      try {
+        const [overview, eventsPayload] = await Promise.all([
+          fetchJSON(`/dashboard/api/overview?${params(false)}`),
+          fetchJSON(`/dashboard/api/events?${params(true)}`)
+        ]);
+        renderOverview(overview);
+        renderEvents(eventsPayload.events || []);
+        text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
+      } catch (error) {
+        text("statusline", error.message);
+      } finally {
+        controls.refresh.disabled = false;
+      }
+    }
+
+    function renderOverview(data) {
+      const totals = data.totals || {};
+      text("metric-total", totals.total || 0);
+      text("metric-connected", totals.connected || 0);
+      text("metric-disconnected", totals.disconnected || 0);
+      text("metric-matched", totals.matched || 0);
+      text("metric-unmatched", totals.unmatched || 0);
+      text("metric-ambiguous", totals.ambiguous || 0);
+      text("metric-window", data.window || controls.window.value);
+      text("timeline-range", `${formatShort(data.since)} - ${formatShort(data.until)}`);
+      renderTimeline(data.timeline || []);
+      renderBreakdown("by-correlation", data.by_correlation_status || []);
+      renderBreakdown("by-transport", data.by_transport || []);
+      renderBreakdown("by-vps", data.by_vps || []);
+    }
+
+    function renderTimeline(timeline) {
+      const target = el("timeline");
+      target.replaceChildren();
+      const max = Math.max(1, ...timeline.map((b) => b.total || 0));
+      for (const bucket of timeline) {
+        const bar = document.createElement("div");
+        const total = bucket.total || 0;
+        bar.className = `bar${total === 0 ? " zero" : ""}`;
+        bar.style.height = `${Math.max(2, Math.round((total / max) * 100))}%`;
+        bar.title = `${formatShort(bucket.bucket_start)} total ${total}, matched ${bucket.matched || 0}, unmatched ${bucket.unmatched || 0}, ambiguous ${bucket.ambiguous || 0}`;
+        target.appendChild(bar);
+      }
+    }
+
+    function renderBreakdown(id, rows) {
+      const target = el(id);
+      target.replaceChildren();
+      if (!rows.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No data";
+        target.appendChild(empty);
+        return;
+      }
+      const max = Math.max(1, ...rows.map((row) => row.count || 0));
+      for (const row of rows.slice(0, 6)) {
+        const wrap = document.createElement("div");
+        wrap.className = "rank-row";
+
+        const name = document.createElement("div");
+        name.className = "rank-name";
+        name.textContent = row.name || "unknown";
+
+        const count = document.createElement("div");
+        count.className = "rank-count";
+        count.textContent = row.count || 0;
+
+        const track = document.createElement("div");
+        track.className = "rank-track";
+        const fill = document.createElement("div");
+        fill.className = "rank-fill";
+        fill.style.width = `${Math.round(((row.count || 0) / max) * 100)}%`;
+        track.appendChild(fill);
+
+        wrap.append(name, count, track);
+        target.appendChild(wrap);
+      }
+    }
+
+    function renderEvents(events) {
+      const body = el("events-body");
+      body.replaceChildren();
+      el("events-empty").hidden = events.length !== 0;
+      text("event-count", `${events.length} shown`);
+      for (const event of events) {
+        const row = document.createElement("tr");
+        row.append(
+          cell(formatTime(event.received_at), "mono"),
+          pillCell(event.status),
+          pillCell(event.correlation_status),
+          cell((event.transport || "-").toUpperCase()),
+          cell(event.host_name || event.computer_name || "-"),
+          cell(event.real_client_ip || "-", "mono"),
+          cell(event.ip_addr || event.ip_raw || "-", "mono"),
+          cell(event.vps_name || event.forwarder_ip || "-", "mono"),
+          cell(event.reverse_ssh_id || "-", "mono")
+        );
+        body.appendChild(row);
+      }
+    }
+
+    function cell(value, className) {
+      const td = document.createElement("td");
+      td.textContent = value == null || value === "" ? "-" : String(value);
+      if (className) td.className = className;
+      td.title = td.textContent;
+      return td;
+    }
+
+    function pillCell(value) {
+      const td = document.createElement("td");
+      const span = document.createElement("span");
+      const name = value || "unknown";
+      span.className = `pill ${name}`;
+      span.textContent = name;
+      td.appendChild(span);
+      return td;
+    }
+
+    function formatTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatShort(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    controls.refresh.addEventListener("click", loadAll);
+    controls.window.addEventListener("change", loadAll);
+    controls.status.addEventListener("change", loadAll);
+    controls.correlation.addEventListener("change", loadAll);
+    controls.transport.addEventListener("change", loadAll);
+    controls.search.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadAll, 250);
+    });
+
+    loadAll();
+    setInterval(loadAll, 30000);
+  </script>
+</body>
+</html>

@@ -8,6 +8,26 @@ Central logger:
 docker compose exec rssh-logger wget -qO- http://127.0.0.1:8080/healthz
 ```
 
+Dashboard API, when `DASHBOARD_TOKEN` is set:
+
+```sh
+set -a
+. /opt/reverse-logger/.env
+set +a
+
+curl -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
+  "http://${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}/dashboard/api/overview?window=24h"
+```
+
+Browser access uses:
+
+```text
+http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/dashboard/
+```
+
+Use HTTP Basic Auth with any username and `DASHBOARD_TOKEN` as the password.
+If `LOGGER_BIND_IP=127.0.0.1`, open the page through an SSH tunnel.
+
 Compose:
 
 ```sh
@@ -185,6 +205,20 @@ Webhook not received:
 1. Check `webhook -l` inside `reverse_ssh`.
 2. Confirm `http://rssh-logger:8080/healthz` works inside the Compose network.
 3. Confirm `WEBHOOK_TOKEN` in `.env` matches the registered webhook URL.
+
+Dashboard not reachable:
+
+1. A `404` on `/dashboard/` means `DASHBOARD_TOKEN` is empty or the running
+   container was not recreated after `.env` changed.
+2. A `401` means the dashboard is enabled but the browser/API did not send the
+   correct token. Browser password is `DASHBOARD_TOKEN`; curl may use
+   `Authorization: Bearer <DASHBOARD_TOKEN>`.
+3. Confirm the port is published with `docker compose ps`. Host access requires
+   `docker-compose.edge-forward.yml`; inside the Compose network, use
+   `http://rssh-logger:8080/dashboard/`.
+4. If `LOGGER_BIND_IP` is not `127.0.0.1`, confirm firewall allowlists include
+   your operator IP/VPN source and required VPS edge sources.
+5. Do not route `/dashboard` through the public VPS nginx reverse_ssh endpoint.
 
 No Telegram alert:
 

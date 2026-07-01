@@ -95,8 +95,10 @@ REVERSE_SSH_WS_PATH=/ws
 REVERSE_SSH_PUSH_PATH=/push
 ```
 
-Add those values to main `.env`, recreate `reverse_ssh` and `rssh-logger`, then
-deploy clients from each group's download URL.
+Add those values to main `.env`, ensure `LOGGER_BIND_IP` is the main address
+reachable from the VPS edge when ingress forwarding is enabled, recreate
+`reverse_ssh` and `rssh-logger`, then deploy clients from each group's download
+URL.
 
 Alternative: set `main_reverse_ssh_port` per group and run separate `reverse_ssh`
 listeners on main when you do not want nginx path rewriting.
@@ -126,8 +128,10 @@ On **each VPS**:
 On **main** (`/opt/reverse-logger`):
 
 1. Stack running with `docker-compose.edge-forward.yml`.
-2. `.env` contains `EDGE_FORWARD_TOKEN`, `REVERSE_SSH_BIND_IP`, matching `INGRESS_*`
-   and `REVERSE_SSH_*` paths.
+2. `.env` contains `EDGE_FORWARD_TOKEN`, `REVERSE_SSH_BIND_IP`,
+   `LOGGER_BIND_IP`, matching `INGRESS_*` and `REVERSE_SSH_*` paths. If
+   `DASHBOARD_TOKEN` is set, keep it only in main `.env`; do not copy it into
+   VPS inventory or group vars.
 3. Operator SSH key can connect to the `reverse_ssh` console:
    `ssh -i /root/.ssh/reverse_ssh_operator -p 3232 127.0.0.1`.
 
@@ -513,7 +517,7 @@ failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 | Variable | Source |
 |----------|--------|
 | `backend_reverse_ssh_url` | `https://<main_internal_ip>:3232` |
-| `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events` |
+| `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events`; main compose must publish this with `LOGGER_BIND_IP=<main_internal_ip>` |
 | `vps_name` | inventory hostname |
 | `vps_public_ip` | `ansible_host` |
 | `vps_internal_ip` | optional `/edge/source-ip` response from main logger |
@@ -657,6 +661,10 @@ cd /opt/reverse-logger
 docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d --force-recreate reverse_ssh rssh-logger
 ```
 
+If `DASHBOARD_TOKEN` is enabled on main, access the dashboard directly through
+`LOGGER_BIND_IP:LOGGER_BIND_PORT` or an SSH tunnel. The VPS nginx templates do
+not publish `/dashboard`, and should stay that way.
+
 Verify each edge:
 
 ```sh
@@ -695,5 +703,7 @@ ansible vps_edge -b -m systemd -a 'name=nginx state=reloaded'
   public paths.
 - `/dl/` uses `proxy_buffering off` for large client binaries.
 - Mirror capture requires `$rssh_mirror_path` in the nginx template (already rendered).
+- Dashboard access belongs on the main logger bind address only; do not add a
+  public `/dashboard` location to VPS nginx.
 - Do not run `certbot --nginx`; the playbook uses `certbot certonly` with the
   configured ACME challenge.

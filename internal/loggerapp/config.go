@@ -16,6 +16,7 @@ type Config struct {
 	DataDir          string
 	WebhookToken     string
 	EdgeForwardToken string
+	DashboardToken   string
 	IngressWSPath    string
 	IngressPushPath  string
 	Correlation      store.CorrelationConfig
@@ -36,6 +37,7 @@ func LoadConfig() (Config, error) {
 		DataDir:          envOrDefault("DATA_DIR", "/data"),
 		WebhookToken:     strings.TrimSpace(os.Getenv("WEBHOOK_TOKEN")),
 		EdgeForwardToken: strings.TrimSpace(os.Getenv("EDGE_FORWARD_TOKEN")),
+		DashboardToken:   strings.TrimSpace(os.Getenv("DASHBOARD_TOKEN")),
 		IngressWSPath:    events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
 		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
 		Correlation:      correlation,

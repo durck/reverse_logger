@@ -818,3 +818,128 @@ func TestDisconnectedDoesNotMatchFreshIngressWithoutPriorConnect(t *testing.T) {
 		t.Fatalf("disconnect should stay unmatched without prior matched connect: %s", rec.Body.String())
 	}
 }
+
+func TestDashboardDisabledWithoutToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardRequiresAuth(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/api/overview", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Basic") {
+		t.Fatalf("missing Basic auth challenge: %q", rec.Header().Get("WWW-Authenticate"))
+	}
+}
+
+func TestDashboardRejectsWrongToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/api/overview", nil)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardAcceptsBasicAuthForPage(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	req.SetBasicAuth("operator", "dash-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "reverse_ssh journal") {
+		t.Fatalf("dashboard page body missing title")
+	}
+}
+
+func TestDashboardAcceptsBearerAuthForAPI(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/api/overview?window=24h", nil)
+	req.Header.Set("Authorization", "Bearer dash-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Totals struct {
+			Total int `json:"total"`
+		} `json:"totals"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Totals.Total != 0 {
+		t.Fatalf("unexpected total = %d", response.Totals.Total)
+	}
+}

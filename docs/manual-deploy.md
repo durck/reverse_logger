@@ -103,8 +103,11 @@ chmod 600 .env
 Generate deployment tokens:
 
 ```sh
-openssl rand -hex 32
-openssl rand -hex 32
+WEBHOOK_TOKEN="$(openssl rand -hex 32)"
+EDGE_FORWARD_TOKEN="$(openssl rand -hex 32)"
+DASHBOARD_TOKEN="$(openssl rand -hex 32)"
+printf 'WEBHOOK_TOKEN=%s\nEDGE_FORWARD_TOKEN=%s\nDASHBOARD_TOKEN=%s\n' \
+  "$WEBHOOK_TOKEN" "$EDGE_FORWARD_TOKEN" "$DASHBOARD_TOKEN"
 ```
 
 Generate the operator SSH key that will be seeded into `reverse_ssh`
@@ -151,6 +154,13 @@ Set at minimum:
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token used by VPS nginx edge
   forwarders for central ingress events.
+- `DASHBOARD_TOKEN`: optional read-only dashboard token. Leave it empty to
+  disable `/dashboard`. Browser access uses HTTP Basic Auth with any username
+  and this value as the password.
+- `LOGGER_BIND_IP` / `LOGGER_BIND_PORT`: host bind for central ingress
+  forwarding and optional dashboard access. Keep `LOGGER_BIND_IP=127.0.0.1`
+  for SSH tunnel access, or set the main private/interface IP and restrict
+  `LOGGER_BIND_PORT` with firewall allowlists.
 - `INGRESS_WS_PATH` / `INGRESS_PUSH_PATH`: central validation paths for nginx
   ingress events. Keep them aligned with VPS nginx and `nginx-edge-forwarder`
   `RSSH_WS_PATH` / `RSSH_PUSH_PATH`; defaults are `/ws` and `/push`.
@@ -232,13 +242,13 @@ docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
 docker compose ps
 ```
 
-This publishes `rssh-logger` on the main server internal bind address:
+This publishes `rssh-logger` on `LOGGER_BIND_IP:LOGGER_BIND_PORT`:
 
 ```text
-http://<REVERSE_SSH_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events
+http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events
 ```
 
-With the example values, the VPS forwarder should use:
+With `LOGGER_BIND_IP=192.0.2.10`, the VPS forwarder should use:
 
 ```text
 NGINX_EDGE_FORWARD_URL=http://192.0.2.10:8080/ingress-events
@@ -246,6 +256,29 @@ NGINX_EDGE_FORWARD_URL=http://192.0.2.10:8080/ingress-events
 
 If you are not using VPS ingress forwarding, plain `docker compose up -d` is
 enough.
+
+When `DASHBOARD_TOKEN` is set, the read-only dashboard is available on the same
+published logger endpoint:
+
+```text
+http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/dashboard/
+```
+
+Use HTTP Basic Auth in the browser: any username, and `DASHBOARD_TOKEN` as the
+password. For localhost-only access, keep `LOGGER_BIND_IP=127.0.0.1` and open
+an SSH tunnel from your workstation:
+
+```sh
+ssh -L 18080:127.0.0.1:8080 <main-user>@<main-host>
+```
+
+Then open:
+
+```text
+http://127.0.0.1:18080/dashboard/
+```
+
+Do not expose `/dashboard` through the public VPS nginx endpoint.
 
 The Docker entrypoint starts the `reverse_ssh` listener from `.env`. With the
 default paths, it is equivalent to:
@@ -429,7 +462,7 @@ sudo nano /etc/reverse-logger/nginx-edge-forwarder.env
 Set at minimum:
 
 - `NGINX_EDGE_FORWARD_URL`: central ingress URL, normally
-  `http://<REVERSE_SSH_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events`.
+  `http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/ingress-events`.
 - `EDGE_FORWARD_TOKEN`: `EDGE_FORWARD_TOKEN` from the main `.env`.
 - `VPS_NAME`, `VPS_PUBLIC_IP`, `VPS_INTERNAL_IP`.
 - `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, matching the main `.env`.
@@ -702,10 +735,13 @@ sudo env \
   sh /opt/reverse-logger/deploy/iptables/main-firewall.sh
 ```
 
-If centralized edge-event forwarding is enabled, add
-`LOGGER_BIND_PORT=8080` so the same path may also reach the central logger. If
-VPS forwarding uses `SNAT_SOURCE_IP`, you may additionally set
-`ALLOWED_SOURCE_IPS` to those SNAT source addresses.
+If centralized edge-event forwarding or interface-bound dashboard access is
+enabled, add `LOGGER_BIND_IP=<main-interface-ip>` and `LOGGER_BIND_PORT=8080`
+so the same path may also reach the central logger. If VPS forwarding uses
+`SNAT_SOURCE_IP`, you may additionally set `ALLOWED_SOURCE_IPS` to those SNAT
+source addresses. If dashboard access uses the same interface, include only
+your operator IP/VPN source plus the VPS edge sources that need
+`/ingress-events`.
 
 Verify after applying:
 
@@ -951,6 +987,14 @@ Check durable logs:
 ```sh
 tail -n 5 /opt/reverse-logger/data/logger/events.jsonl
 sqlite3 /opt/reverse-logger/data/logger/events.db 'select status, host_name, ip_raw, received_at from events order by id desc limit 5;'
+```
+
+If `DASHBOARD_TOKEN` is set and the logger port is published, smoke-test the
+dashboard API from the main host:
+
+```sh
+curl -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
+  "http://${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}/dashboard/api/overview?window=24h"
 ```
 
 Then test the real public path for the selected entrypoint mode.

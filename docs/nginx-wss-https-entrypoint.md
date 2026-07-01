@@ -100,8 +100,12 @@ cd /opt/reverse-logger
 docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
 ```
 
+Set `LOGGER_BIND_IP` in main `.env` to the main address reachable from the VPS
+edge; the compose override defaults to `127.0.0.1` for local dashboard access.
 Keep `EDGE_FORWARD_TOKEN` in `.env`; the VPS forwarder uses the same token for
-`/ingress-events/<EDGE_FORWARD_TOKEN>`.
+`/ingress-events/<EDGE_FORWARD_TOKEN>`. If `DASHBOARD_TOKEN` is set, protect
+`LOGGER_BIND_PORT` with a firewall allowlist and do not proxy `/dashboard`
+through the public VPS nginx endpoint.
 
 If you change public transport paths, configure all three places consistently:
 
