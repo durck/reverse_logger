@@ -213,7 +213,7 @@
 
     .timeline {
       position: relative;
-      min-height: 328px;
+      min-height: 342px;
       padding: 12px 14px 8px;
       border-bottom: 1px solid var(--line);
     }
@@ -221,7 +221,7 @@
     .chart-svg {
       display: block;
       width: 100%;
-      height: 302px;
+      height: 316px;
       overflow: visible;
     }
 
@@ -499,7 +499,7 @@
         <div id="timeline" class="timeline"></div>
       <div class="legend">
         <span><span class="dot"></span>Live sessions</span>
-        <span><span class="dot peak"></span>Bucket peak</span>
+        <span><span class="dot peak"></span>Historical peak</span>
         <span><span class="dot ok"></span>Connected events</span>
         <span><span class="dot bad"></span>Disconnected events</span>
         <span><span class="dot warn"></span>Other events</span>
@@ -658,18 +658,20 @@
         return;
       }
       const width = 920;
-      const height = 302;
-      const margin = { top: 16, right: 18, bottom: 88, left: 42 };
+      const height = 316;
+      const margin = { top: 16, right: 18, bottom: 108, left: 42 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
+      const baseline = margin.top + plotHeight;
+      const eventStripY = baseline + 18;
+      const eventStripHeight = 24;
       const focus = focusedTimeline(timeline);
       const buckets = focus.items;
       const activePeakMax = Math.max(0, ...buckets.map(activePeakValue));
       const activeEndMax = Math.max(0, ...buckets.map(activeEndValue));
-      const eventMax = Math.max(0, ...buckets.map(bucketEventCount));
       const hasActiveSignal = Math.max(activePeakMax, activeEndMax) > 0;
       const hasActiveLine = activeEndMax > 0;
-      const yMax = niceTimelineMax(Math.max(activePeakMax, activeEndMax, eventMax));
+      const yMax = niceTimelineMax(Math.max(activePeakMax, activeEndMax));
       const xFor = (index) => margin.left + (buckets.length === 1 ? 0 : (index / (buckets.length - 1)) * plotWidth);
       const yFor = (value) => margin.top + plotHeight - (value / yMax) * plotHeight;
       const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "Active sessions over time" });
@@ -691,14 +693,13 @@
         svg.appendChild(svgEl("line", { x1: margin.left, y1: y, x2: width - margin.right, y2: y, stroke: "var(--grid)", "stroke-width": "1" }));
         svg.appendChild(svgText(margin.left - 10, y + 4, String(tick), "end", "var(--axis)"));
       }
-      svg.appendChild(svgEl("line", { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, stroke: "var(--axis)", "stroke-width": "1" }));
+      svg.appendChild(svgEl("line", { x1: margin.left, y1: baseline, x2: width - margin.right, y2: baseline, stroke: "var(--axis)", "stroke-width": "1" }));
 
-      renderEventBars(svg, buckets, xFor, yFor, margin.top + plotHeight, hasActiveSignal);
-      renderActivePeakMarkers(svg, buckets, xFor, yFor, margin.top + plotHeight);
+      renderActivePeakMarkers(svg, buckets, xFor, yFor, baseline, focus.startIndex, timeline.length);
 
       if (hasActiveLine) {
         const linePath = activeCurvePath(buckets, xFor, yFor);
-        const areaPath = `${linePath} L ${xFor(buckets.length - 1)} ${margin.top + plotHeight} L ${xFor(0)} ${margin.top + plotHeight} Z`;
+        const areaPath = `${linePath} L ${xFor(buckets.length - 1)} ${baseline} L ${xFor(0)} ${baseline} Z`;
         svg.appendChild(svgEl("path", { d: areaPath, fill: "url(#activeArea)" }));
         svg.appendChild(svgEl("path", {
           d: linePath,
@@ -723,13 +724,15 @@
         }
       }
 
+      renderEventBars(svg, buckets, xFor, eventStripY, eventStripHeight, hasActiveSignal);
+
       const xTickIndexes = xAxisTickIndexes(buckets.length);
       for (const index of xTickIndexes) {
         const x = xFor(index);
-        svg.appendChild(svgEl("line", { x1: x, y1: margin.top + plotHeight, x2: x, y2: margin.top + plotHeight + 4, stroke: "var(--axis)", "stroke-width": "1" }));
-        svg.appendChild(svgText(x, margin.top + plotHeight + 46, formatAxisTime(buckets[index].bucket_start, focus.isFocused), "middle", "var(--axis)"));
+        svg.appendChild(svgEl("line", { x1: x, y1: baseline, x2: x, y2: baseline + 4, stroke: "var(--axis)", "stroke-width": "1" }));
+        svg.appendChild(svgText(x, baseline + 58, formatAxisTime(buckets[index].bucket_start, focus.isFocused), "middle", "var(--axis)"));
       }
-      renderOverviewStrip(svg, timeline, focus, margin.left, height - 26, plotWidth);
+      renderOverviewStrip(svg, timeline, focus, margin.left, height - 24, plotWidth);
 
       target.appendChild(svg);
     }
@@ -924,8 +927,10 @@
       return path;
     }
 
-    function renderActivePeakMarkers(svg, buckets, xFor, yFor, baseline) {
+    function renderActivePeakMarkers(svg, buckets, xFor, yFor, baseline, focusStartIndex, timelineLength) {
       for (let i = 0; i < buckets.length; i++) {
+        const absoluteIndex = focusStartIndex + i;
+        if (absoluteIndex >= timelineLength - 1) continue;
         const peak = activePeakValue(buckets[i]);
         const end = activeEndValue(buckets[i]);
         if (peak <= end) continue;
@@ -954,10 +959,20 @@
       }
     }
 
-    function renderEventBars(svg, buckets, xFor, yFor, baseline, muted) {
+    function renderEventBars(svg, buckets, xFor, stripY, stripHeight, muted) {
+      const totalMax = Math.max(1, ...buckets.map(bucketEventCount));
       const spacing = buckets.length > 1 ? Math.abs(xFor(1) - xFor(0)) : 40;
-      const barWidth = Math.max(5, Math.min(24, spacing * 0.56));
-      const opacity = muted ? "0.24" : "0.82";
+      const barWidth = Math.max(4, Math.min(18, spacing * 0.42));
+      const opacity = muted ? "0.38" : "0.86";
+      svg.appendChild(svgEl("line", {
+        x1: xFor(0),
+        y1: stripY + stripHeight,
+        x2: xFor(buckets.length - 1),
+        y2: stripY + stripHeight,
+        stroke: "var(--line)",
+        "stroke-width": "2",
+        "stroke-linecap": "round"
+      }));
       for (let i = 0; i < buckets.length; i++) {
         const bucket = buckets[i];
         const connected = bucket.connected || 0;
@@ -966,7 +981,7 @@
         const other = Math.max(0, total - connected - disconnected);
         if (!total) continue;
 
-        let cursor = baseline;
+        let cursor = stripY + stripHeight;
         const x = xFor(i) - barWidth / 2;
         const segments = [
           { value: connected, color: "var(--ok)" },
@@ -975,8 +990,7 @@
         ];
         for (const segment of segments) {
           if (!segment.value) continue;
-          const y = yFor(segment.value);
-          const height = Math.max(3, baseline - y);
+          const height = Math.max(3, (segment.value / totalMax) * stripHeight);
           cursor -= height;
           svg.appendChild(svgEl("rect", {
             x,

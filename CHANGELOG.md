@@ -16,6 +16,9 @@
 - Add end-of-bucket active-session values to the dashboard timeline so the
   latest chart edge reflects the current active-session count while preserving
   bucket peak markers.
+- Separate dashboard event bars from the live-session scale and hide peak
+  markers for the current bucket to avoid reading historical peaks as current
+  active sessions.
 - Add separate `LOGGER_BIND_IP` host publishing for the central logger and
   dashboard instead of reusing `REVERSE_SSH_BIND_IP`.
 - Add a pip virtualenv Certbot fallback when Snap Store setup fails during
