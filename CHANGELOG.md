@@ -5,6 +5,8 @@
 - Add a token-protected read-only `rssh-logger` dashboard for enriched event
   journal summaries, filters, and recent sessions.
 - Show ingress host/domain and VPS IP metadata in dashboard recent sessions.
+- Add current active-session count/list and active-session history to the
+  dashboard timeline.
 - Add separate `LOGGER_BIND_IP` host publishing for the central logger and
   dashboard instead of reusing `REVERSE_SSH_BIND_IP`.
 - Add a pip virtualenv Certbot fallback when Snap Store setup fails during

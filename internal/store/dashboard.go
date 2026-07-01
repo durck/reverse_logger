@@ -23,11 +23,13 @@ type DashboardOverview struct {
 	ByTransport         []DashboardCount          `json:"by_transport"`
 	ByVPS               []DashboardCount          `json:"by_vps"`
 	Timeline            []DashboardTimelineBucket `json:"timeline"`
+	ActiveSessions      []DashboardEvent          `json:"active_sessions"`
 	Recent              []DashboardEvent          `json:"recent"`
 }
 
 type DashboardTotals struct {
 	Total        int `json:"total"`
+	Active       int `json:"active"`
 	Connected    int `json:"connected"`
 	Disconnected int `json:"disconnected"`
 	Matched      int `json:"matched"`
@@ -43,6 +45,7 @@ type DashboardCount struct {
 type DashboardTimelineBucket struct {
 	BucketStart  string `json:"bucket_start"`
 	Total        int    `json:"total"`
+	Active       int    `json:"active"`
 	Connected    int    `json:"connected"`
 	Disconnected int    `json:"disconnected"`
 	Matched      int    `json:"matched"`
@@ -116,6 +119,12 @@ func (s *Store) DashboardOverview(ctx context.Context, window time.Duration) (Da
 		return DashboardOverview{}, err
 	}
 	if overview.Timeline, err = s.dashboardTimeline(ctx, bounds); err != nil {
+		return DashboardOverview{}, err
+	}
+	if overview.ActiveSessions, err = s.dashboardActiveSessions(ctx, 100); err != nil {
+		return DashboardOverview{}, err
+	}
+	if overview.Totals.Active, err = s.dashboardActiveSessionCount(ctx); err != nil {
 		return DashboardOverview{}, err
 	}
 
@@ -288,14 +297,7 @@ LIMIT 20`, bounds.since, bounds.until)
 }
 
 func (s *Store) dashboardTimeline(ctx context.Context, bounds dashboardTimeBounds) ([]DashboardTimelineBucket, error) {
-	bucketExpr := "substr(received_at, 1, 13) || ':00:00Z'"
-	step := time.Hour
-	layout := "2006-01-02T15:00:00Z"
-	if bounds.window > 48*time.Hour {
-		bucketExpr = "substr(received_at, 1, 10) || 'T00:00:00Z'"
-		step = 24 * time.Hour
-		layout = "2006-01-02T00:00:00Z"
-	}
+	bucketExpr, step, layout := dashboardTimelineResolution(bounds.window)
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT `+bucketExpr+` AS bucket_start,
@@ -354,7 +356,137 @@ ORDER BY bucket_start ASC`, bounds.since, bounds.until)
 		}
 		timeline = append(timeline, bucket)
 	}
+	if err := s.applyActiveTimeline(ctx, bounds, timeline, step, layout); err != nil {
+		return nil, err
+	}
 	return timeline, nil
+}
+
+func dashboardTimelineResolution(window time.Duration) (string, time.Duration, string) {
+	if window > 48*time.Hour {
+		return "substr(received_at, 1, 10) || 'T00:00:00Z'", 24 * time.Hour, "2006-01-02T00:00:00Z"
+	}
+	return "substr(received_at, 1, 13) || ':00:00Z'", time.Hour, "2006-01-02T15:00:00Z"
+}
+
+func (s *Store) dashboardActiveSessions(ctx context.Context, limit int) ([]DashboardEvent, error) {
+	limit = normalizeDashboardLimit(limit)
+	rows, err := s.db.QueryContext(ctx, `
+WITH latest AS (
+	SELECT max(id) AS id
+	FROM enriched_events
+	WHERE reverse_ssh_id <> ''
+	GROUP BY reverse_ssh_id
+)
+SELECT ee.id, ee.status, ee.correlation_status, ee.correlation_method, ee.reverse_ssh_id,
+	ee.host_name, ee.user_name, ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port,
+	ee.real_client_ip, ee.client_port, ee.transport, ee.public_key_fingerprint,
+	ee.proxy_source_ip, ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip,
+	ee.forwarder_ip, ie.host, ee.version, ee.received_at, ee.ingress_received_at
+FROM enriched_events ee
+JOIN latest ON latest.id = ee.id
+LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
+WHERE ee.status = 'connected'
+ORDER BY ee.received_at DESC, ee.id DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]DashboardEvent, 0)
+	for rows.Next() {
+		event, err := scanDashboardEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) dashboardActiveSessionCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+WITH latest AS (
+	SELECT max(id) AS id
+	FROM enriched_events
+	WHERE reverse_ssh_id <> ''
+	GROUP BY reverse_ssh_id
+)
+SELECT count(*)
+FROM enriched_events ee
+JOIN latest ON latest.id = ee.id
+WHERE ee.status = 'connected'`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) applyActiveTimeline(ctx context.Context, bounds dashboardTimeBounds, timeline []DashboardTimelineBucket, step time.Duration, layout string) error {
+	if len(timeline) == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT reverse_ssh_id, status, received_at
+FROM enriched_events
+WHERE reverse_ssh_id <> ''
+  AND received_at <= ?
+ORDER BY received_at ASC, id ASC`, bounds.until)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	stateEvents := make([]dashboardSessionStateEvent, 0)
+	for rows.Next() {
+		var event dashboardSessionStateEvent
+		var receivedAt string
+		if err := rows.Scan(&event.reverseSSHID, &event.status, &receivedAt); err != nil {
+			return err
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, receivedAt)
+		if err != nil {
+			continue
+		}
+		event.receivedAt = parsed.UTC()
+		stateEvents = append(stateEvents, event)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	until, err := time.Parse(time.RFC3339Nano, bounds.until)
+	if err != nil {
+		return err
+	}
+	active := map[string]bool{}
+	eventIndex := 0
+	for i := range timeline {
+		bucketStart, err := time.Parse(layout, timeline[i].BucketStart)
+		if err != nil {
+			continue
+		}
+		bucketEnd := bucketStart.Add(step)
+		if bucketEnd.After(until) {
+			bucketEnd = until
+		}
+		for eventIndex < len(stateEvents) && !stateEvents[eventIndex].receivedAt.After(bucketEnd) {
+			event := stateEvents[eventIndex]
+			if event.status == "connected" {
+				active[event.reverseSSHID] = true
+			} else {
+				delete(active, event.reverseSSHID)
+			}
+			eventIndex++
+		}
+		timeline[i].Active = len(active)
+	}
+	return nil
+}
+
+type dashboardSessionStateEvent struct {
+	reverseSSHID string
+	status       string
+	receivedAt   time.Time
 }
 
 func truncateDashboardBucket(value time.Time, step time.Duration) time.Time {

@@ -100,7 +100,7 @@
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
@@ -147,6 +147,14 @@
     .panel {
       min-width: 0;
       overflow: hidden;
+    }
+
+    .shell > .panel {
+      margin-bottom: 14px;
+    }
+
+    .shell > .panel:last-child {
+      margin-bottom: 0;
     }
 
     .panel-head {
@@ -277,7 +285,7 @@
 
     table {
       width: 100%;
-      min-width: 1080px;
+      min-width: 1320px;
       border-collapse: collapse;
       table-layout: fixed;
     }
@@ -403,6 +411,7 @@
 
     <section class="metrics" aria-label="Summary">
       <div class="metric"><div class="label">Total</div><div id="metric-total" class="value">0</div><div class="sub" id="metric-window">24h</div></div>
+      <div class="metric"><div class="label">Active now</div><div id="metric-active" class="value">0</div><div class="sub">live sessions</div></div>
       <div class="metric"><div class="label">Connected</div><div id="metric-connected" class="value">0</div><div class="sub">session opens</div></div>
       <div class="metric"><div class="label">Disconnected</div><div id="metric-disconnected" class="value">0</div><div class="sub">session closes</div></div>
       <div class="metric"><div class="label">Matched</div><div id="metric-matched" class="value">0</div><div class="sub">ingress linked</div></div>
@@ -413,15 +422,15 @@
     <section class="grid">
       <section class="panel" aria-label="Timeline">
         <div class="panel-head">
-          <div class="panel-title">Timeline</div>
+          <div class="panel-title">Active sessions timeline</div>
           <div id="timeline-range" class="panel-subtitle"></div>
         </div>
         <div id="timeline" class="timeline"></div>
         <div class="legend">
-          <span><span class="dot"></span>Total events</span>
-          <span><span class="dot ok"></span>Matched</span>
-          <span><span class="dot bad"></span>Unmatched</span>
-          <span><span class="dot warn"></span>Ambiguous</span>
+          <span><span class="dot"></span>Live sessions</span>
+          <span><span class="dot ok"></span>Matched events</span>
+          <span><span class="dot bad"></span>Unmatched events</span>
+          <span><span class="dot warn"></span>Ambiguous events</span>
         </div>
       </section>
 
@@ -436,6 +445,34 @@
           <div><div class="breakdown-title">VPS</div><div id="by-vps"></div></div>
         </div>
       </section>
+    </section>
+
+    <section class="panel" aria-label="Active sessions">
+      <div class="panel-head">
+        <div class="panel-title">Active sessions</div>
+        <div id="active-count" class="panel-subtitle"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 168px;">Connected at</th>
+              <th style="width: 116px;">Status</th>
+              <th style="width: 132px;">Correlation</th>
+              <th style="width: 130px;">Transport</th>
+              <th style="width: 180px;">Host</th>
+              <th style="width: 180px;">Domain</th>
+              <th style="width: 150px;">Client IP</th>
+              <th style="width: 150px;">Seen IP</th>
+              <th style="width: 150px;">VPS</th>
+              <th style="width: 150px;">VPS IP</th>
+              <th style="width: 220px;">ID</th>
+            </tr>
+          </thead>
+          <tbody id="active-body"></tbody>
+        </table>
+        <div id="active-empty" class="empty" hidden>No active sessions</div>
+      </div>
     </section>
 
     <section class="panel" aria-label="Recent sessions">
@@ -529,6 +566,7 @@
     function renderOverview(data) {
       const totals = data.totals || {};
       text("metric-total", totals.total || 0);
+      text("metric-active", totals.active || 0);
       text("metric-connected", totals.connected || 0);
       text("metric-disconnected", totals.disconnected || 0);
       text("metric-matched", totals.matched || 0);
@@ -540,18 +578,19 @@
       renderBreakdown("by-correlation", data.by_correlation_status || []);
       renderBreakdown("by-transport", data.by_transport || []);
       renderBreakdown("by-vps", data.by_vps || []);
+      renderSessionTable(data.active_sessions || [], "active-body", "active-empty", "active-count");
     }
 
     function renderTimeline(timeline) {
       const target = el("timeline");
       target.replaceChildren();
-      const max = Math.max(1, ...timeline.map((b) => b.total || 0));
+      const max = Math.max(1, ...timeline.map((b) => b.active || 0));
       for (const bucket of timeline) {
         const bar = document.createElement("div");
-        const total = bucket.total || 0;
-        bar.className = `bar${total === 0 ? " zero" : ""}`;
-        bar.style.height = `${Math.max(2, Math.round((total / max) * 100))}%`;
-        bar.title = `${formatShort(bucket.bucket_start)} total ${total}, matched ${bucket.matched || 0}, unmatched ${bucket.unmatched || 0}, ambiguous ${bucket.ambiguous || 0}`;
+        const active = bucket.active || 0;
+        bar.className = `bar${active === 0 ? " zero" : ""}`;
+        bar.style.height = `${Math.max(2, Math.round((active / max) * 100))}%`;
+        bar.title = `${formatShort(bucket.bucket_start)} active ${active}, events ${bucket.total || 0}, matched ${bucket.matched || 0}, unmatched ${bucket.unmatched || 0}, ambiguous ${bucket.ambiguous || 0}`;
         target.appendChild(bar);
       }
     }
@@ -592,10 +631,14 @@
     }
 
     function renderEvents(events) {
-      const body = el("events-body");
-      body.replaceChildren();
-      el("events-empty").hidden = events.length !== 0;
-      text("event-count", `${events.length} shown`);
+      renderSessionTable(events, "events-body", "events-empty", "event-count");
+    }
+
+    function renderSessionTable(events, bodyID, emptyID, countID) {
+      const targetBody = el(bodyID);
+      targetBody.replaceChildren();
+      el(emptyID).hidden = events.length !== 0;
+      text(countID, `${events.length} shown`);
       for (const event of events) {
         const row = document.createElement("tr");
         row.append(
@@ -611,7 +654,7 @@
           cell(vpsIP(event), "mono"),
           cell(event.reverse_ssh_id || "-", "mono")
         );
-        body.appendChild(row);
+        targetBody.appendChild(row);
       }
     }
 

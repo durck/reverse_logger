@@ -209,6 +209,36 @@ func TestDashboardOverviewSummarizesEnrichedEvents(t *testing.T) {
 	}
 }
 
+func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	seedDashboardEnrichedForClient(t, st, "live-open", "client-live", "connected", "matched", "wss", "edge-1", "live.host", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-90*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "closed-open", "client-closed", "connected", "matched", "wss", "edge-1", "closed.host", "198.51.100.11", "203.0.113.10", "edge1.example.com", now.Add(-80*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "closed-close", "client-closed", "disconnected", "matched", "wss", "edge-1", "closed.host", "198.51.100.11", "203.0.113.10", "edge1.example.com", now.Add(-10*time.Minute))
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 1 {
+		t.Fatalf("active total = %d, totals=%+v", overview.Totals.Active, overview.Totals)
+	}
+	if len(overview.ActiveSessions) != 1 {
+		t.Fatalf("active sessions length = %d, sessions=%+v", len(overview.ActiveSessions), overview.ActiveSessions)
+	}
+	if overview.ActiveSessions[0].ReverseSSHID != "client-live" {
+		t.Fatalf("unexpected active session: %+v", overview.ActiveSessions[0])
+	}
+	if len(overview.Timeline) == 0 || overview.Timeline[len(overview.Timeline)-1].Active != 1 {
+		t.Fatalf("unexpected active timeline tail: %+v", overview.Timeline)
+	}
+}
+
 func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {
@@ -243,6 +273,11 @@ func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 }
 
 func seedDashboardEnriched(t *testing.T, st *Store, suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP, vpsPublicIP, ingressHost string, receivedAt time.Time) {
+	t.Helper()
+	seedDashboardEnrichedForClient(t, st, suffix, "client-"+suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP, vpsPublicIP, ingressHost, receivedAt)
+}
+
+func seedDashboardEnrichedForClient(t *testing.T, st *Store, suffix, reverseSSHID, status, correlationStatus, transport, vpsName, hostName, realClientIP, vpsPublicIP, ingressHost string, receivedAt time.Time) {
 	t.Helper()
 	ingressHash := "dashboard-ingress-" + suffix
 	_, err := st.db.Exec(`
@@ -281,7 +316,7 @@ INSERT INTO enriched_events (
 		correlationStatus,
 		"test",
 		status,
-		"client-"+suffix,
+		reverseSSHID,
 		hostName,
 		"operator",
 		hostName,
