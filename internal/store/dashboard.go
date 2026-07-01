@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -363,10 +364,20 @@ ORDER BY bucket_start ASC`, bounds.since, bounds.until)
 }
 
 func dashboardTimelineResolution(window time.Duration) (string, time.Duration, string) {
+	if window > 14*24*time.Hour {
+		return dashboardHourBucketExpr(6), 6 * time.Hour, "2006-01-02T15:00:00Z"
+	}
 	if window > 48*time.Hour {
-		return "substr(received_at, 1, 10) || 'T00:00:00Z'", 24 * time.Hour, "2006-01-02T00:00:00Z"
+		return dashboardHourBucketExpr(3), 3 * time.Hour, "2006-01-02T15:00:00Z"
 	}
 	return "substr(received_at, 1, 13) || ':00:00Z'", time.Hour, "2006-01-02T15:00:00Z"
+}
+
+func dashboardHourBucketExpr(hours int) string {
+	return fmt.Sprintf(
+		"substr(received_at, 1, 11) || printf('%%02d', (CAST(substr(received_at, 12, 2) AS INTEGER) / %[1]d) * %[1]d) || ':00:00Z'",
+		hours,
+	)
 }
 
 func (s *Store) dashboardActiveSessions(ctx context.Context, limit int) ([]DashboardEvent, error) {
@@ -460,6 +471,14 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 	}
 	active := map[string]bool{}
 	eventIndex := 0
+	timelineStart, err := time.Parse(layout, timeline[0].BucketStart)
+	if err != nil {
+		return err
+	}
+	for eventIndex < len(stateEvents) && stateEvents[eventIndex].receivedAt.Before(timelineStart) {
+		applyDashboardSessionState(active, stateEvents[eventIndex])
+		eventIndex++
+	}
 	for i := range timeline {
 		bucketStart, err := time.Parse(layout, timeline[i].BucketStart)
 		if err != nil {
@@ -469,18 +488,26 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 		if bucketEnd.After(until) {
 			bucketEnd = until
 		}
+		peak := len(active)
 		for eventIndex < len(stateEvents) && !stateEvents[eventIndex].receivedAt.After(bucketEnd) {
 			event := stateEvents[eventIndex]
-			if event.status == "connected" {
-				active[event.reverseSSHID] = true
-			} else {
-				delete(active, event.reverseSSHID)
+			applyDashboardSessionState(active, event)
+			if current := len(active); current > peak {
+				peak = current
 			}
 			eventIndex++
 		}
-		timeline[i].Active = len(active)
+		timeline[i].Active = peak
 	}
 	return nil
+}
+
+func applyDashboardSessionState(active map[string]bool, event dashboardSessionStateEvent) {
+	if event.status == "connected" {
+		active[event.reverseSSHID] = true
+		return
+	}
+	delete(active, event.reverseSSHID)
 }
 
 type dashboardSessionStateEvent struct {

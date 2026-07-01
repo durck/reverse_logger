@@ -234,8 +234,46 @@ func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
 	if overview.ActiveSessions[0].ReverseSSHID != "client-live" {
 		t.Fatalf("unexpected active session: %+v", overview.ActiveSessions[0])
 	}
-	if len(overview.Timeline) == 0 || overview.Timeline[len(overview.Timeline)-1].Active != 1 {
+	if len(overview.Timeline) == 0 || overview.Timeline[len(overview.Timeline)-1].Active < overview.Totals.Active {
 		t.Fatalf("unexpected active timeline tail: %+v", overview.Timeline)
+	}
+}
+
+func TestDashboardTimelineReportsPeakActiveSessionsWithinLongWindowBucket(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	seedDashboardEnrichedForClient(t, st, "stale-open", "client-stale", "connected", "matched", "wss", "edge-1", "stale.host", "198.51.100.20", "203.0.113.10", "edge1.example.com", now.Add(-60*24*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "stale-close", "client-stale", "disconnected", "matched", "wss", "edge-1", "stale.host", "198.51.100.20", "203.0.113.10", "edge1.example.com", now.Add(-45*24*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "short-open", "client-short", "connected", "matched", "wss", "edge-1", "short.host", "198.51.100.21", "203.0.113.10", "edge1.example.com", now.Add(-72*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "short-close", "client-short", "disconnected", "matched", "wss", "edge-1", "short.host", "198.51.100.21", "203.0.113.10", "edge1.example.com", now.Add(-71*time.Hour-45*time.Minute))
+
+	overview, err := st.DashboardOverview(context.Background(), 30*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 0 {
+		t.Fatalf("active total = %d, totals=%+v", overview.Totals.Active, overview.Totals)
+	}
+	if len(overview.Timeline) < 80 {
+		t.Fatalf("expected sub-day buckets for long window, got %d", len(overview.Timeline))
+	}
+	if overview.Timeline[0].Active != 0 {
+		t.Fatalf("stale pre-window session leaked into first bucket: %+v", overview.Timeline[0])
+	}
+	hasShortSessionPeak := false
+	for _, bucket := range overview.Timeline {
+		if bucket.Active > 0 {
+			hasShortSessionPeak = true
+			break
+		}
+	}
+	if !hasShortSessionPeak {
+		t.Fatalf("short session peak was not represented in timeline: %+v", overview.Timeline)
 	}
 }
 

@@ -213,7 +213,7 @@
 
     .timeline {
       position: relative;
-      min-height: 286px;
+      min-height: 328px;
       padding: 12px 14px 8px;
       border-bottom: 1px solid var(--line);
     }
@@ -221,7 +221,7 @@
     .chart-svg {
       display: block;
       width: 100%;
-      height: 260px;
+      height: 302px;
       overflow: visible;
     }
 
@@ -493,7 +493,7 @@
         </div>
         <div id="timeline" class="timeline"></div>
         <div class="legend">
-          <span><span class="dot"></span>Live sessions</span>
+        <span><span class="dot"></span>Peak live sessions</span>
           <span><span class="dot ok"></span>Matched events</span>
           <span><span class="dot bad"></span>Unmatched events</span>
           <span><span class="dot warn"></span>Ambiguous events</span>
@@ -652,13 +652,16 @@
         return;
       }
       const width = 920;
-      const height = 260;
-      const margin = { top: 14, right: 18, bottom: 38, left: 42 };
+      const height = 302;
+      const margin = { top: 16, right: 18, bottom: 88, left: 42 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const maxActive = Math.max(1, ...timeline.map((b) => b.active || 0));
-      const xFor = (index) => margin.left + (timeline.length === 1 ? 0 : (index / (timeline.length - 1)) * plotWidth);
-      const yFor = (value) => margin.top + plotHeight - (value / maxActive) * plotHeight;
+      const focus = focusedTimeline(timeline);
+      const buckets = focus.items;
+      const maxActive = Math.max(1, ...buckets.map((b) => b.active || 0));
+      const yMax = niceActiveMax(maxActive);
+      const xFor = (index) => margin.left + (buckets.length === 1 ? 0 : (index / (buckets.length - 1)) * plotWidth);
+      const yFor = (value) => margin.top + plotHeight - (value / yMax) * plotHeight;
       const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "Active sessions over time" });
 
       const defs = svgEl("defs");
@@ -670,7 +673,9 @@
       defs.appendChild(gradient);
       svg.appendChild(defs);
 
-      const yTicks = yAxisTicks(maxActive);
+      text("timeline-range", timelineRangeLabel(timeline, focus));
+
+      const yTicks = yAxisTicks(yMax);
       for (const tick of yTicks) {
         const y = yFor(tick);
         svg.appendChild(svgEl("line", { x1: margin.left, y1: y, x2: width - margin.right, y2: y, stroke: "var(--grid)", "stroke-width": "1" }));
@@ -678,28 +683,39 @@
       }
       svg.appendChild(svgEl("line", { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, stroke: "var(--axis)", "stroke-width": "1" }));
 
-      const stepPath = activeStepPath(timeline, xFor, yFor);
-      const areaPath = `${stepPath} L ${xFor(timeline.length - 1)} ${margin.top + plotHeight} L ${xFor(0)} ${margin.top + plotHeight} Z`;
+      const linePath = activeCurvePath(buckets, xFor, yFor);
+      const areaPath = `${linePath} L ${xFor(buckets.length - 1)} ${margin.top + plotHeight} L ${xFor(0)} ${margin.top + plotHeight} Z`;
       svg.appendChild(svgEl("path", { d: areaPath, fill: "url(#activeArea)" }));
-      svg.appendChild(svgEl("path", { d: stepPath, fill: "none", stroke: "var(--accent-dark)", "stroke-width": "3", "stroke-linejoin": "round" }));
+      svg.appendChild(svgEl("path", {
+        d: linePath,
+        fill: "none",
+        stroke: "var(--accent-dark)",
+        "stroke-width": "3",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round"
+      }));
 
-      for (let i = 0; i < timeline.length; i++) {
-        const bucket = timeline[i];
+      for (let i = 0; i < buckets.length; i++) {
+        const bucket = buckets[i];
         const x = xFor(i);
         const y = yFor(bucket.active || 0);
         const hit = svgEl("circle", { cx: x, cy: y, r: "6", fill: "transparent" });
-        hit.appendChild(svgEl("title", {}, `${formatShort(bucket.bucket_start)}\nactive ${bucket.active || 0}\nconnected ${bucket.connected || 0}\ndisconnected ${bucket.disconnected || 0}\nunmatched ${bucket.unmatched || 0}`));
+        hit.appendChild(svgEl("title", {}, `${formatShort(bucket.bucket_start)}\npeak active ${bucket.active || 0}\nconnected ${bucket.connected || 0}\ndisconnected ${bucket.disconnected || 0}\nunmatched ${bucket.unmatched || 0}`));
         svg.appendChild(hit);
-        renderEventMarker(svg, x, margin.top + plotHeight + 9, bucket.connected || 0, "var(--ok)", 1);
-        renderEventMarker(svg, x, margin.top + plotHeight + 18, bucket.disconnected || 0, "var(--bad)", -1);
+        if ((bucket.active || 0) > 0) {
+          svg.appendChild(svgEl("circle", { cx: x, cy: y, r: "3.5", fill: "var(--panel)", stroke: "var(--accent-dark)", "stroke-width": "2" }));
+        }
+        renderEventMarker(svg, x, margin.top + plotHeight + 12, bucket.connected || 0, "var(--ok)", -1);
+        renderEventMarker(svg, x, margin.top + plotHeight + 22, bucket.disconnected || 0, "var(--bad)", 1);
       }
 
-      const xTickIndexes = xAxisTickIndexes(timeline.length);
+      const xTickIndexes = xAxisTickIndexes(buckets.length);
       for (const index of xTickIndexes) {
         const x = xFor(index);
         svg.appendChild(svgEl("line", { x1: x, y1: margin.top + plotHeight, x2: x, y2: margin.top + plotHeight + 4, stroke: "var(--axis)", "stroke-width": "1" }));
-        svg.appendChild(svgText(x, height - 8, formatAxisTime(timeline[index].bucket_start), "middle", "var(--axis)"));
+        svg.appendChild(svgText(x, margin.top + plotHeight + 46, formatAxisTime(buckets[index].bucket_start, focus.isFocused), "middle", "var(--axis)"));
       }
+      renderOverviewStrip(svg, timeline, focus, margin.left, height - 26, plotWidth);
 
       target.appendChild(svg);
     }
@@ -815,10 +831,13 @@
       return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
     }
 
-    function formatAxisTime(value) {
+    function formatAxisTime(value, includeTime = false) {
       if (!value) return "";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
+      if (includeTime) {
+        return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit" });
+      }
       return date.toLocaleString([], { month: "short", day: "2-digit" });
     }
 
@@ -836,16 +855,119 @@
       return textNode;
     }
 
-    function activeStepPath(timeline, xFor, yFor) {
-      let path = `M ${xFor(0)} ${yFor(timeline[0].active || 0)}`;
-      for (let i = 1; i < timeline.length; i++) {
-        const prevY = yFor(timeline[i - 1].active || 0);
+    function focusedTimeline(timeline) {
+      const activeIndexes = [];
+      for (let i = 0; i < timeline.length; i++) {
+        if (timelineActivity(timeline[i]) > 0) activeIndexes.push(i);
+      }
+      if (!activeIndexes.length) {
+        return { items: timeline, startIndex: 0, endIndex: timeline.length - 1, isFocused: false };
+      }
+
+      const first = activeIndexes[0];
+      const last = activeIndexes[activeIndexes.length - 1];
+      const activityWidth = last - first + 1;
+      const pad = Math.max(2, Math.ceil(activityWidth * 0.75), Math.ceil(timeline.length * 0.025));
+      let start = Math.max(0, first - pad);
+      let end = Math.min(timeline.length - 1, last + pad);
+      const minBuckets = Math.min(timeline.length, 16);
+      while (end - start + 1 < minBuckets && (start > 0 || end < timeline.length - 1)) {
+        if (start > 0) start--;
+        if (end - start + 1 >= minBuckets) break;
+        if (end < timeline.length - 1) end++;
+      }
+      return {
+        items: timeline.slice(start, end + 1),
+        startIndex: start,
+        endIndex: end,
+        isFocused: start > 0 || end < timeline.length - 1
+      };
+    }
+
+    function timelineActivity(bucket) {
+      return (bucket.active || 0) + (bucket.connected || 0) + (bucket.disconnected || 0) + (bucket.matched || 0) + (bucket.unmatched || 0) + (bucket.ambiguous || 0);
+    }
+
+    function timelineRangeLabel(timeline, focus) {
+      if (!focus.isFocused) {
+        return `${formatShort(timeline[0].bucket_start)} - ${formatShort(timeline[timeline.length - 1].bucket_start)}`;
+      }
+      const first = focus.items[0];
+      const last = focus.items[focus.items.length - 1];
+      return `${formatShort(first.bucket_start)} - ${formatShort(last.bucket_start)} (activity focus)`;
+    }
+
+    function activeCurvePath(buckets, xFor, yFor) {
+      let path = `M ${xFor(0)} ${yFor(buckets[0].active || 0)}`;
+      for (let i = 1; i < buckets.length; i++) {
+        const previousX = xFor(i - 1);
+        const previousY = yFor(buckets[i - 1].active || 0);
         const x = xFor(i);
-        const y = yFor(timeline[i].active || 0);
-        path += ` H ${x} V ${y}`;
-        if (prevY === y) path += "";
+        const y = yFor(buckets[i].active || 0);
+        const midX = previousX + (x - previousX) / 2;
+        path += ` C ${midX} ${previousY}, ${midX} ${y}, ${x} ${y}`;
       }
       return path;
+    }
+
+    function renderOverviewStrip(svg, timeline, focus, x, y, width) {
+      const stripHeight = 14;
+      const xFor = (index) => x + (timeline.length === 1 ? width / 2 : (index / (timeline.length - 1)) * width);
+      svg.appendChild(svgEl("line", {
+        x1: x,
+        y1: y + stripHeight,
+        x2: x + width,
+        y2: y + stripHeight,
+        stroke: "var(--line)",
+        "stroke-width": "3",
+        "stroke-linecap": "round"
+      }));
+
+      const maxActivity = Math.max(1, ...timeline.map(timelineActivity));
+      const barWidth = Math.max(1.5, (width / Math.max(timeline.length, 1)) * 0.72);
+      for (let i = 0; i < timeline.length; i++) {
+        const score = timelineActivity(timeline[i]);
+        if (!score) continue;
+        const bucket = timeline[i];
+        const barHeight = Math.max(3, (score / maxActivity) * stripHeight);
+        svg.appendChild(svgEl("rect", {
+          x: xFor(i) - barWidth / 2,
+          y: y + stripHeight - barHeight,
+          width: barWidth,
+          height: barHeight,
+          rx: "1.5",
+          fill: overviewBucketColor(bucket),
+          opacity: "0.75"
+        }));
+      }
+
+      const focusStart = xFor(focus.startIndex);
+      const focusEnd = xFor(focus.endIndex);
+      svg.appendChild(svgEl("rect", {
+        x: Math.min(focusStart, focusEnd) - 4,
+        y: y - 4,
+        width: Math.max(8, Math.abs(focusEnd - focusStart) + 8),
+        height: stripHeight + 10,
+        rx: "4",
+        fill: "transparent",
+        stroke: focus.isFocused ? "var(--accent-dark)" : "var(--border)",
+        "stroke-width": focus.isFocused ? "1.5" : "1"
+      }));
+    }
+
+    function overviewBucketColor(bucket) {
+      if ((bucket.active || 0) > 0) return "var(--accent)";
+      if ((bucket.unmatched || 0) > 0) return "var(--bad)";
+      if ((bucket.ambiguous || 0) > 0) return "var(--warn)";
+      return "var(--ok)";
+    }
+
+    function niceActiveMax(max) {
+      if (max <= 1) return 2;
+      if (max <= 3) return max + 1;
+      if (max <= 5) return 6;
+      if (max <= 10) return 12;
+      return Math.ceil((max * 1.2) / 5) * 5;
     }
 
     function renderEventMarker(svg, x, y, count, color, direction) {
