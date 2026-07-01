@@ -47,6 +47,7 @@ type DashboardTimelineBucket struct {
 	BucketStart  string `json:"bucket_start"`
 	Total        int    `json:"total"`
 	Active       int    `json:"active"`
+	ActiveEnd    int    `json:"active_end"`
 	Connected    int    `json:"connected"`
 	Disconnected int    `json:"disconnected"`
 	Matched      int    `json:"matched"`
@@ -498,6 +499,7 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 			eventIndex++
 		}
 		timeline[i].Active = peak
+		timeline[i].ActiveEnd = len(active)
 	}
 	return nil
 }

@@ -237,6 +237,9 @@ func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
 	if len(overview.Timeline) == 0 || overview.Timeline[len(overview.Timeline)-1].Active < overview.Totals.Active {
 		t.Fatalf("unexpected active timeline tail: %+v", overview.Timeline)
 	}
+	if overview.Timeline[len(overview.Timeline)-1].ActiveEnd != overview.Totals.Active {
+		t.Fatalf("active timeline tail end = %d, active total = %d, tail=%+v", overview.Timeline[len(overview.Timeline)-1].ActiveEnd, overview.Totals.Active, overview.Timeline[len(overview.Timeline)-1])
+	}
 }
 
 func TestDashboardTimelineReportsPeakActiveSessionsWithinLongWindowBucket(t *testing.T) {
@@ -274,6 +277,36 @@ func TestDashboardTimelineReportsPeakActiveSessionsWithinLongWindowBucket(t *tes
 	}
 	if !hasShortSessionPeak {
 		t.Fatalf("short session peak was not represented in timeline: %+v", overview.Timeline)
+	}
+}
+
+func TestDashboardTimelineSeparatesPeakFromBucketEnd(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	until := time.Date(2026, 7, 1, 15, 45, 0, 0, time.UTC)
+	seedDashboardEnrichedForClient(t, st, "active-one", "client-one", "connected", "matched", "wss", "edge-1", "one.host", "198.51.100.30", "203.0.113.10", "edge1.example.com", until.Add(-3*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "active-two", "client-two", "connected", "matched", "wss", "edge-1", "two.host", "198.51.100.31", "203.0.113.10", "edge1.example.com", until.Add(-2*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "short-open", "client-short", "connected", "matched", "wss", "edge-1", "short.host", "198.51.100.32", "203.0.113.10", "edge1.example.com", until.Add(-30*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "short-close", "client-short", "disconnected", "matched", "wss", "edge-1", "short.host", "198.51.100.32", "203.0.113.10", "edge1.example.com", until.Add(-10*time.Minute))
+
+	timeline, err := st.dashboardTimeline(context.Background(), dashboardTimeBounds{
+		window: 24 * time.Hour,
+		since:  until.Add(-24 * time.Hour).Format(time.RFC3339Nano),
+		until:  until.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := timeline[len(timeline)-1]
+	if last.Active != 3 {
+		t.Fatalf("last bucket peak active = %d, bucket=%+v", last.Active, last)
+	}
+	if last.ActiveEnd != 2 {
+		t.Fatalf("last bucket active end = %d, bucket=%+v", last.ActiveEnd, last)
 	}
 }
 

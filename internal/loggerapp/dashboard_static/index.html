@@ -244,6 +244,11 @@
       background: var(--accent);
     }
 
+    .dot.peak {
+      background: var(--panel);
+      border: 2px solid var(--accent-dark);
+    }
+
     .dot.ok {
       background: var(--ok);
     }
@@ -492,8 +497,9 @@
           <div id="timeline-range" class="panel-subtitle"></div>
         </div>
         <div id="timeline" class="timeline"></div>
-        <div class="legend">
-        <span><span class="dot"></span>Live session peak</span>
+      <div class="legend">
+        <span><span class="dot"></span>Live sessions</span>
+        <span><span class="dot peak"></span>Bucket peak</span>
         <span><span class="dot ok"></span>Connected events</span>
         <span><span class="dot bad"></span>Disconnected events</span>
         <span><span class="dot warn"></span>Other events</span>
@@ -658,10 +664,12 @@
       const plotHeight = height - margin.top - margin.bottom;
       const focus = focusedTimeline(timeline);
       const buckets = focus.items;
-      const activeMax = Math.max(0, ...buckets.map((b) => b.active || 0));
+      const activePeakMax = Math.max(0, ...buckets.map(activePeakValue));
+      const activeEndMax = Math.max(0, ...buckets.map(activeEndValue));
       const eventMax = Math.max(0, ...buckets.map(bucketEventCount));
-      const hasActiveLine = activeMax > 0;
-      const yMax = niceTimelineMax(Math.max(activeMax, eventMax));
+      const hasActiveSignal = Math.max(activePeakMax, activeEndMax) > 0;
+      const hasActiveLine = activeEndMax > 0;
+      const yMax = niceTimelineMax(Math.max(activePeakMax, activeEndMax, eventMax));
       const xFor = (index) => margin.left + (buckets.length === 1 ? 0 : (index / (buckets.length - 1)) * plotWidth);
       const yFor = (value) => margin.top + plotHeight - (value / yMax) * plotHeight;
       const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "Active sessions over time" });
@@ -685,7 +693,8 @@
       }
       svg.appendChild(svgEl("line", { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, stroke: "var(--axis)", "stroke-width": "1" }));
 
-      renderEventBars(svg, buckets, xFor, yFor, margin.top + plotHeight, hasActiveLine);
+      renderEventBars(svg, buckets, xFor, yFor, margin.top + plotHeight, hasActiveSignal);
+      renderActivePeakMarkers(svg, buckets, xFor, yFor, margin.top + plotHeight);
 
       if (hasActiveLine) {
         const linePath = activeCurvePath(buckets, xFor, yFor);
@@ -704,11 +713,12 @@
       for (let i = 0; i < buckets.length; i++) {
         const bucket = buckets[i];
         const x = xFor(i);
-        const y = yFor(bucket.active || 0);
+        const activeValue = hasActiveLine ? activeEndValue(bucket) : activePeakValue(bucket);
+        const y = yFor(activeValue);
         const hit = svgEl("circle", { cx: x, cy: y, r: "6", fill: "transparent" });
-        hit.appendChild(svgEl("title", {}, `${formatShort(bucket.bucket_start)}\npeak active ${bucket.active || 0}\nconnected ${bucket.connected || 0}\ndisconnected ${bucket.disconnected || 0}\nevents ${bucketEventCount(bucket)}`));
+        hit.appendChild(svgEl("title", {}, `${formatShort(bucket.bucket_start)}\nlive end ${activeEndValue(bucket)}\npeak active ${activePeakValue(bucket)}\nconnected ${bucket.connected || 0}\ndisconnected ${bucket.disconnected || 0}\nevents ${bucketEventCount(bucket)}`));
         svg.appendChild(hit);
-        if (hasActiveLine && (bucket.active || 0) > 0) {
+        if (hasActiveLine && activeEndValue(bucket) > 0) {
           svg.appendChild(svgEl("circle", { cx: x, cy: y, r: "3.5", fill: "var(--panel)", stroke: "var(--accent-dark)", "stroke-width": "2" }));
         }
       }
@@ -889,7 +899,7 @@
     }
 
     function timelineActivity(bucket) {
-      return (bucket.active || 0) + (bucket.connected || 0) + (bucket.disconnected || 0) + (bucket.matched || 0) + (bucket.unmatched || 0) + (bucket.ambiguous || 0);
+      return Math.max(activePeakValue(bucket), activeEndValue(bucket)) + (bucket.connected || 0) + (bucket.disconnected || 0) + (bucket.matched || 0) + (bucket.unmatched || 0) + (bucket.ambiguous || 0);
     }
 
     function timelineRangeLabel(timeline, focus) {
@@ -902,16 +912,46 @@
     }
 
     function activeCurvePath(buckets, xFor, yFor) {
-      let path = `M ${xFor(0)} ${yFor(buckets[0].active || 0)}`;
+      let path = `M ${xFor(0)} ${yFor(activeEndValue(buckets[0]))}`;
       for (let i = 1; i < buckets.length; i++) {
         const previousX = xFor(i - 1);
-        const previousY = yFor(buckets[i - 1].active || 0);
+        const previousY = yFor(activeEndValue(buckets[i - 1]));
         const x = xFor(i);
-        const y = yFor(buckets[i].active || 0);
+        const y = yFor(activeEndValue(buckets[i]));
         const midX = previousX + (x - previousX) / 2;
         path += ` C ${midX} ${previousY}, ${midX} ${y}, ${x} ${y}`;
       }
       return path;
+    }
+
+    function renderActivePeakMarkers(svg, buckets, xFor, yFor, baseline) {
+      for (let i = 0; i < buckets.length; i++) {
+        const peak = activePeakValue(buckets[i]);
+        const end = activeEndValue(buckets[i]);
+        if (peak <= end) continue;
+        const x = xFor(i);
+        const yPeak = yFor(peak);
+        const yEnd = end > 0 ? yFor(end) : baseline;
+        svg.appendChild(svgEl("line", {
+          x1: x,
+          y1: yPeak,
+          x2: x,
+          y2: yEnd,
+          stroke: "var(--accent-dark)",
+          "stroke-width": "2",
+          "stroke-linecap": "round",
+          opacity: "0.42"
+        }));
+        svg.appendChild(svgEl("circle", {
+          cx: x,
+          cy: yPeak,
+          r: "3.5",
+          fill: "var(--panel)",
+          stroke: "var(--accent-dark)",
+          "stroke-width": "2",
+          opacity: "0.9"
+        }));
+      }
     }
 
     function renderEventBars(svg, buckets, xFor, yFor, baseline, muted) {
@@ -964,6 +1004,31 @@
         "stroke-linecap": "round"
       }));
 
+      const focusStart = xFor(focus.startIndex);
+      const focusEnd = xFor(focus.endIndex);
+      if (focus.isFocused) {
+        svg.appendChild(svgEl("rect", {
+          x: Math.min(focusStart, focusEnd),
+          y: y - 3,
+          width: Math.max(3, Math.abs(focusEnd - focusStart)),
+          height: stripHeight + 8,
+          rx: "2",
+          fill: "var(--accent-soft)",
+          opacity: "0.82"
+        }));
+        for (const edge of [focusStart, focusEnd]) {
+          svg.appendChild(svgEl("line", {
+            x1: edge,
+            y1: y - 3,
+            x2: edge,
+            y2: y + stripHeight + 5,
+            stroke: "var(--accent-dark)",
+            "stroke-width": "1",
+            opacity: "0.5"
+          }));
+        }
+      }
+
       const maxActivity = Math.max(1, ...timeline.map(timelineActivity));
       const barWidth = Math.max(1.5, (width / Math.max(timeline.length, 1)) * 0.72);
       for (let i = 0; i < timeline.length; i++) {
@@ -981,26 +1046,21 @@
           opacity: "0.75"
         }));
       }
-
-      const focusStart = xFor(focus.startIndex);
-      const focusEnd = xFor(focus.endIndex);
-      svg.appendChild(svgEl("rect", {
-        x: Math.min(focusStart, focusEnd) - 4,
-        y: y - 4,
-        width: Math.max(8, Math.abs(focusEnd - focusStart) + 8),
-        height: stripHeight + 10,
-        rx: "4",
-        fill: "transparent",
-        stroke: focus.isFocused ? "var(--accent-dark)" : "var(--border)",
-        "stroke-width": focus.isFocused ? "1.5" : "1"
-      }));
     }
 
     function overviewBucketColor(bucket) {
-      if ((bucket.active || 0) > 0) return "var(--accent)";
+      if (Math.max(activePeakValue(bucket), activeEndValue(bucket)) > 0) return "var(--accent)";
       if ((bucket.unmatched || 0) > 0) return "var(--bad)";
       if ((bucket.ambiguous || 0) > 0) return "var(--warn)";
       return "var(--ok)";
+    }
+
+    function activePeakValue(bucket) {
+      return bucket.active || 0;
+    }
+
+    function activeEndValue(bucket) {
+      return bucket.active_end ?? activePeakValue(bucket);
     }
 
     function bucketEventCount(bucket) {

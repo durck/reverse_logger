@@ -13,6 +13,9 @@
   peak-active aggregation, activity focus, and a full-window overview strip.
 - Render session event bars in the dashboard timeline so closed sessions do
   not leave an empty active-session chart.
+- Add end-of-bucket active-session values to the dashboard timeline so the
+  latest chart edge reflects the current active-session count while preserving
+  bucket peak markers.
 - Add separate `LOGGER_BIND_IP` host publishing for the central logger and
   dashboard instead of reusing `REVERSE_SSH_BIND_IP`.
 - Add a pip virtualenv Certbot fallback when Snap Store setup fails during
