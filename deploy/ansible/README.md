@@ -449,6 +449,8 @@ reverse_logger_go_delay: 5
 reverse_logger_go_download_trace: true
 reverse_logger_go_download_async_timeout: 180
 reverse_logger_go_download_poll_interval: 5
+nginx_edge_fix_resolv_conf: true
+nginx_edge_resolv_conf_source: /run/systemd/resolve/resolv.conf
 ```
 
 `GOTOOLCHAIN=local` prevents `go mod download` from fetching a newer compiler
@@ -466,6 +468,11 @@ byte-level Go download progress bar, but the async timeout/poll settings make
 long downloads show periodic polling instead of a silent task. The default
 budgets intentionally fail fast; increase the retry, delay, and async timeout
 values for very slow targets.
+
+At the start of the playbook, `nginx_edge_fix_resolv_conf` points
+`/etc/resolv.conf` at the systemd-resolved runtime file. This is equivalent to
+`ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf` and keeps later
+Snap/Go/apt DNS checks on the same resolver path.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a

@@ -17,6 +17,8 @@
   run the module download with async polling/trace output.
 - Shorten default VPS edge retry and timeout budgets so broken target-side
   network paths fail faster during interactive deploys.
+- Link `/etc/resolv.conf` to systemd-resolved early in the VPS edge playbook so
+  later apt, Snap, and Go DNS checks use the runtime resolver.
 - Add bounded retries and Snap Store preflight checks to Ansible VPS edge
   deployment network tasks.
 - Add a main-observed source IP probe for Ansible VPS deployments and stop

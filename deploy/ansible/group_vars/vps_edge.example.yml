@@ -25,6 +25,8 @@ reverse_logger_go_delay: 5
 reverse_logger_go_download_trace: true
 reverse_logger_go_download_async_timeout: 180
 reverse_logger_go_download_poll_interval: 5
+nginx_edge_fix_resolv_conf: true
+nginx_edge_resolv_conf_source: /run/systemd/resolve/resolv.conf
 
 main_internal_ip: 192.0.2.10
 main_reverse_ssh_port: 3232

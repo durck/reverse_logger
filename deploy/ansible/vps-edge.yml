@@ -25,6 +25,8 @@
         reverse_logger_go_download_trace: "{{ reverse_logger_go_download_trace | default(true) }}"
         reverse_logger_go_download_async_timeout: "{{ reverse_logger_go_download_async_timeout | default(180, true) }}"
         reverse_logger_go_download_poll_interval: "{{ reverse_logger_go_download_poll_interval | default(5, true) }}"
+        nginx_edge_fix_resolv_conf: "{{ nginx_edge_fix_resolv_conf | default(true) }}"
+        nginx_edge_resolv_conf_source: "{{ nginx_edge_resolv_conf_source | default('/run/systemd/resolve/resolv.conf', true) }}"
         nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
         nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
         nginx_edge_log_path: "{{ nginx_edge_log_path | default('', true) }}"
@@ -82,6 +84,17 @@
         main_reverse_ssh_port: "{{ main_reverse_ssh_port | default(3232, true) }}"
         main_logger_port: "{{ main_logger_port | default(8080, true) }}"
       tags: always
+
+    - name: Point /etc/resolv.conf at systemd-resolved runtime config
+      ansible.builtin.file:
+        src: "{{ nginx_edge_resolv_conf_source }}"
+        dest: /etc/resolv.conf
+        state: link
+        force: true
+      when: nginx_edge_fix_resolv_conf | bool
+      tags:
+        - always
+        - dns
 
     - name: Resolve random or configured public paths
       ansible.builtin.import_tasks: tasks/resolve-rssh-paths.yml
