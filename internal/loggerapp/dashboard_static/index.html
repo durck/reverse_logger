@@ -14,7 +14,10 @@
       --border: #d9dee7;
       --line: #eef1f5;
       --accent: #087f8c;
+      --accent-dark: #05606b;
       --accent-soft: #d9f0f2;
+      --grid: #e8edf3;
+      --axis: #98a2b3;
       --ok: #218358;
       --warn: #b7791f;
       --bad: #b42318;
@@ -100,9 +103,9 @@
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(7, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }
 
     .metric,
@@ -118,6 +121,10 @@
       padding: 14px;
     }
 
+    .metric.primary {
+      min-height: 104px;
+    }
+
     .metric .label {
       color: var(--muted);
       font-size: 12px;
@@ -126,7 +133,7 @@
 
     .metric .value {
       margin-top: 8px;
-      font-size: 30px;
+      font-size: 34px;
       font-weight: 760;
       line-height: 1;
     }
@@ -135,6 +142,32 @@
       margin-top: 8px;
       color: var(--muted);
       min-height: 18px;
+    }
+
+    .metric-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .metric-chip {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 8px;
+      min-height: 32px;
+      padding: 5px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      box-shadow: var(--shadow);
+    }
+
+    .metric-chip strong {
+      color: var(--text);
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
     }
 
     .grid {
@@ -179,24 +212,17 @@
     }
 
     .timeline {
-      display: flex;
-      align-items: flex-end;
-      gap: 3px;
-      height: 230px;
-      padding: 16px 14px 10px;
+      position: relative;
+      min-height: 286px;
+      padding: 12px 14px 8px;
       border-bottom: 1px solid var(--line);
     }
 
-    .bar {
-      flex: 1 1 0;
-      min-width: 4px;
-      height: 2px;
-      border-radius: 4px 4px 0 0;
-      background: var(--accent);
-    }
-
-    .bar.zero {
-      background: #d5dbe4;
+    .chart-svg {
+      display: block;
+      width: 100%;
+      height: 260px;
+      overflow: visible;
     }
 
     .legend {
@@ -247,7 +273,7 @@
     .rank-row {
       display: grid;
       grid-template-columns: minmax(90px, 1fr) 42px;
-      gap: 8px;
+      gap: 5px 8px;
       align-items: center;
       min-height: 28px;
     }
@@ -266,7 +292,7 @@
 
     .rank-track {
       grid-column: 1 / -1;
-      height: 6px;
+      height: 4px;
       background: var(--line);
       border-radius: 999px;
       overflow: hidden;
@@ -285,7 +311,7 @@
 
     table {
       width: 100%;
-      min-width: 1320px;
+      min-width: 940px;
       border-collapse: collapse;
       table-layout: fixed;
     }
@@ -312,6 +338,43 @@
     .mono {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 12px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .stack-main,
+    .stack-sub {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .stack-main {
+      font-weight: 650;
+    }
+
+    .stack-sub {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel.compact .table-wrap {
+      display: none;
+    }
+
+    .compact-empty {
+      display: none;
+      padding: 16px 14px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+    }
+
+    .panel.compact .compact-empty {
+      display: block;
     }
 
     .pill {
@@ -410,13 +473,16 @@
     </section>
 
     <section class="metrics" aria-label="Summary">
-      <div class="metric"><div class="label">Total</div><div id="metric-total" class="value">0</div><div class="sub" id="metric-window">24h</div></div>
-      <div class="metric"><div class="label">Active now</div><div id="metric-active" class="value">0</div><div class="sub">live sessions</div></div>
-      <div class="metric"><div class="label">Connected</div><div id="metric-connected" class="value">0</div><div class="sub">session opens</div></div>
-      <div class="metric"><div class="label">Disconnected</div><div id="metric-disconnected" class="value">0</div><div class="sub">session closes</div></div>
-      <div class="metric"><div class="label">Matched</div><div id="metric-matched" class="value">0</div><div class="sub">ingress linked</div></div>
-      <div class="metric"><div class="label">Unmatched</div><div id="metric-unmatched" class="value">0</div><div class="sub">needs review</div></div>
-      <div class="metric"><div class="label">Ambiguous</div><div id="metric-ambiguous" class="value">0</div><div class="sub">multiple candidates</div></div>
+      <div class="metric primary"><div class="label">Active now</div><div id="metric-active" class="value">0</div><div class="sub">live sessions</div></div>
+      <div class="metric primary"><div class="label">Connected</div><div id="metric-connected" class="value">0</div><div class="sub">session opens</div></div>
+      <div class="metric primary"><div class="label">Disconnected</div><div id="metric-disconnected" class="value">0</div><div class="sub">session closes</div></div>
+      <div class="metric primary"><div class="label">Unmatched</div><div id="metric-unmatched" class="value">0</div><div class="sub">needs review</div></div>
+    </section>
+
+    <section class="metric-strip" aria-label="Secondary summary">
+      <div class="metric-chip"><span>Total</span><strong id="metric-total">0</strong><span id="metric-window">24h</span></div>
+      <div class="metric-chip"><span>Matched</span><strong id="metric-matched">0</strong></div>
+      <div class="metric-chip"><span>Ambiguous</span><strong id="metric-ambiguous">0</strong></div>
     </section>
 
     <section class="grid">
@@ -447,11 +513,12 @@
       </section>
     </section>
 
-    <section class="panel" aria-label="Active sessions">
+    <section id="active-panel" class="panel" aria-label="Active sessions">
       <div class="panel-head">
         <div class="panel-title">Active sessions</div>
         <div id="active-count" class="panel-subtitle"></div>
       </div>
+      <div class="compact-empty">No active sessions</div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -459,14 +526,10 @@
               <th style="width: 168px;">Connected at</th>
               <th style="width: 116px;">Status</th>
               <th style="width: 132px;">Correlation</th>
-              <th style="width: 130px;">Transport</th>
-              <th style="width: 180px;">Host</th>
-              <th style="width: 180px;">Domain</th>
-              <th style="width: 150px;">Client IP</th>
-              <th style="width: 150px;">Seen IP</th>
-              <th style="width: 150px;">VPS</th>
-              <th style="width: 150px;">VPS IP</th>
-              <th style="width: 220px;">ID</th>
+              <th style="width: 260px;">Client</th>
+              <th style="width: 210px;">Network</th>
+              <th style="width: 260px;">Ingress</th>
+              <th style="width: 170px;">ID</th>
             </tr>
           </thead>
           <tbody id="active-body"></tbody>
@@ -487,14 +550,10 @@
               <th style="width: 168px;">Received</th>
               <th style="width: 116px;">Status</th>
               <th style="width: 132px;">Correlation</th>
-              <th style="width: 130px;">Transport</th>
-              <th style="width: 180px;">Host</th>
-              <th style="width: 180px;">Domain</th>
-              <th style="width: 150px;">Client IP</th>
-              <th style="width: 150px;">Seen IP</th>
-              <th style="width: 150px;">VPS</th>
-              <th style="width: 150px;">VPS IP</th>
-              <th style="width: 220px;">ID</th>
+              <th style="width: 260px;">Client</th>
+              <th style="width: 210px;">Network</th>
+              <th style="width: 260px;">Ingress</th>
+              <th style="width: 170px;">ID</th>
             </tr>
           </thead>
           <tbody id="events-body"></tbody>
@@ -579,20 +638,70 @@
       renderBreakdown("by-transport", data.by_transport || []);
       renderBreakdown("by-vps", data.by_vps || []);
       renderSessionTable(data.active_sessions || [], "active-body", "active-empty", "active-count");
+      el("active-panel").classList.toggle("compact", !(data.active_sessions || []).length);
     }
 
     function renderTimeline(timeline) {
       const target = el("timeline");
       target.replaceChildren();
-      const max = Math.max(1, ...timeline.map((b) => b.active || 0));
-      for (const bucket of timeline) {
-        const bar = document.createElement("div");
-        const active = bucket.active || 0;
-        bar.className = `bar${active === 0 ? " zero" : ""}`;
-        bar.style.height = `${Math.max(2, Math.round((active / max) * 100))}%`;
-        bar.title = `${formatShort(bucket.bucket_start)} active ${active}, events ${bucket.total || 0}, matched ${bucket.matched || 0}, unmatched ${bucket.unmatched || 0}, ambiguous ${bucket.ambiguous || 0}`;
-        target.appendChild(bar);
+      if (!timeline.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No timeline data";
+        target.appendChild(empty);
+        return;
       }
+      const width = 920;
+      const height = 260;
+      const margin = { top: 14, right: 18, bottom: 38, left: 42 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const maxActive = Math.max(1, ...timeline.map((b) => b.active || 0));
+      const xFor = (index) => margin.left + (timeline.length === 1 ? 0 : (index / (timeline.length - 1)) * plotWidth);
+      const yFor = (value) => margin.top + plotHeight - (value / maxActive) * plotHeight;
+      const svg = svgEl("svg", { class: "chart-svg", viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "Active sessions over time" });
+
+      const defs = svgEl("defs");
+      const gradient = svgEl("linearGradient", { id: "activeArea", x1: "0", y1: "0", x2: "0", y2: "1" });
+      gradient.append(
+        svgEl("stop", { offset: "0%", "stop-color": "var(--accent)", "stop-opacity": "0.24" }),
+        svgEl("stop", { offset: "100%", "stop-color": "var(--accent)", "stop-opacity": "0.03" })
+      );
+      defs.appendChild(gradient);
+      svg.appendChild(defs);
+
+      const yTicks = yAxisTicks(maxActive);
+      for (const tick of yTicks) {
+        const y = yFor(tick);
+        svg.appendChild(svgEl("line", { x1: margin.left, y1: y, x2: width - margin.right, y2: y, stroke: "var(--grid)", "stroke-width": "1" }));
+        svg.appendChild(svgText(margin.left - 10, y + 4, String(tick), "end", "var(--axis)"));
+      }
+      svg.appendChild(svgEl("line", { x1: margin.left, y1: margin.top + plotHeight, x2: width - margin.right, y2: margin.top + plotHeight, stroke: "var(--axis)", "stroke-width": "1" }));
+
+      const stepPath = activeStepPath(timeline, xFor, yFor);
+      const areaPath = `${stepPath} L ${xFor(timeline.length - 1)} ${margin.top + plotHeight} L ${xFor(0)} ${margin.top + plotHeight} Z`;
+      svg.appendChild(svgEl("path", { d: areaPath, fill: "url(#activeArea)" }));
+      svg.appendChild(svgEl("path", { d: stepPath, fill: "none", stroke: "var(--accent-dark)", "stroke-width": "3", "stroke-linejoin": "round" }));
+
+      for (let i = 0; i < timeline.length; i++) {
+        const bucket = timeline[i];
+        const x = xFor(i);
+        const y = yFor(bucket.active || 0);
+        const hit = svgEl("circle", { cx: x, cy: y, r: "6", fill: "transparent" });
+        hit.appendChild(svgEl("title", {}, `${formatShort(bucket.bucket_start)}\nactive ${bucket.active || 0}\nconnected ${bucket.connected || 0}\ndisconnected ${bucket.disconnected || 0}\nunmatched ${bucket.unmatched || 0}`));
+        svg.appendChild(hit);
+        renderEventMarker(svg, x, margin.top + plotHeight + 9, bucket.connected || 0, "var(--ok)", 1);
+        renderEventMarker(svg, x, margin.top + plotHeight + 18, bucket.disconnected || 0, "var(--bad)", -1);
+      }
+
+      const xTickIndexes = xAxisTickIndexes(timeline.length);
+      for (const index of xTickIndexes) {
+        const x = xFor(index);
+        svg.appendChild(svgEl("line", { x1: x, y1: margin.top + plotHeight, x2: x, y2: margin.top + plotHeight + 4, stroke: "var(--axis)", "stroke-width": "1" }));
+        svg.appendChild(svgText(x, height - 8, formatAxisTime(timeline[index].bucket_start), "middle", "var(--axis)"));
+      }
+
+      target.appendChild(svg);
     }
 
     function renderBreakdown(id, rows) {
@@ -645,13 +754,9 @@
           cell(formatTime(event.received_at), "mono"),
           pillCell(event.status),
           pillCell(event.correlation_status),
-          cell((event.transport || "-").toUpperCase()),
-          cell(event.host_name || event.computer_name || "-"),
-          cell(event.ingress_host || "-", "mono"),
-          cell(event.real_client_ip || "-", "mono"),
-          cell(event.ip_addr || event.ip_raw || "-", "mono"),
-          cell(event.vps_name || event.forwarder_ip || "-", "mono"),
-          cell(vpsIP(event), "mono"),
+          stackCell(event.host_name || event.computer_name || "-", event.user_name || event.version || "-"),
+          stackCell(event.real_client_ip || "-", event.ip_addr || event.ip_raw || "-", "mono"),
+          stackCell(event.ingress_host || "-", `${event.vps_name || "-"} / ${vpsIP(event)} / ${(event.transport || "-").toUpperCase()}`, "mono"),
           cell(event.reverse_ssh_id || "-", "mono")
         );
         targetBody.appendChild(row);
@@ -676,6 +781,22 @@
       return td;
     }
 
+    function stackCell(main, sub, className) {
+      const td = document.createElement("td");
+      const wrap = document.createElement("div");
+      wrap.className = "stack";
+      const mainEl = document.createElement("div");
+      mainEl.className = `stack-main${className ? ` ${className}` : ""}`;
+      mainEl.textContent = main || "-";
+      const subEl = document.createElement("div");
+      subEl.className = `stack-sub${className ? ` ${className}` : ""}`;
+      subEl.textContent = sub || "-";
+      td.title = `${mainEl.textContent}\n${subEl.textContent}`;
+      wrap.append(mainEl, subEl);
+      td.appendChild(wrap);
+      return td;
+    }
+
     function vpsIP(event) {
       return event.vps_public_ip || event.forwarder_ip || event.vps_internal_ip || "-";
     }
@@ -692,6 +813,66 @@
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
       return date.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function formatAxisTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString([], { month: "short", day: "2-digit" });
+    }
+
+    function svgEl(name, attrs = {}, textContent) {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+      for (const [key, value] of Object.entries(attrs)) {
+        node.setAttribute(key, String(value));
+      }
+      if (textContent != null) node.textContent = textContent;
+      return node;
+    }
+
+    function svgText(x, y, label, anchor, fill) {
+      const textNode = svgEl("text", { x, y, "text-anchor": anchor, fill, "font-size": "12" }, label);
+      return textNode;
+    }
+
+    function activeStepPath(timeline, xFor, yFor) {
+      let path = `M ${xFor(0)} ${yFor(timeline[0].active || 0)}`;
+      for (let i = 1; i < timeline.length; i++) {
+        const prevY = yFor(timeline[i - 1].active || 0);
+        const x = xFor(i);
+        const y = yFor(timeline[i].active || 0);
+        path += ` H ${x} V ${y}`;
+        if (prevY === y) path += "";
+      }
+      return path;
+    }
+
+    function renderEventMarker(svg, x, y, count, color, direction) {
+      if (!count) return;
+      const length = Math.min(16, 5 + count * 2);
+      svg.appendChild(svgEl("line", {
+        x1: x,
+        y1: y,
+        x2: x,
+        y2: y + length * direction,
+        stroke: color,
+        "stroke-width": "2",
+        "stroke-linecap": "round",
+        opacity: "0.75"
+      }));
+    }
+
+    function yAxisTicks(max) {
+      if (max <= 1) return [0, 1];
+      const ticks = [0, Math.ceil(max / 2), max];
+      return [...new Set(ticks)].sort((a, b) => a - b);
+    }
+
+    function xAxisTickIndexes(length) {
+      if (length <= 1) return [0];
+      const indexes = [0, Math.floor((length - 1) / 2), length - 1];
+      return [...new Set(indexes)];
     }
 
     controls.refresh.addEventListener("click", loadAll);

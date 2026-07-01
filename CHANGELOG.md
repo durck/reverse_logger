@@ -7,6 +7,8 @@
 - Show ingress host/domain and VPS IP metadata in dashboard recent sessions.
 - Add current active-session count/list and active-session history to the
   dashboard timeline.
+- Redesign the dashboard layout with primary metrics, compact tables, and a
+  step/area active-session chart with event markers.
 - Add separate `LOGGER_BIND_IP` host publishing for the central logger and
   dashboard instead of reusing `REVERSE_SSH_BIND_IP`.
 - Add a pip virtualenv Certbot fallback when Snap Store setup fails during
