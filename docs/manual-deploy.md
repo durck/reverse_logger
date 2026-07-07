@@ -968,7 +968,33 @@ VPS using [telegram-proxy.md](telegram-proxy.md). Then smoke-test from the main
 server:
 
 ```sh
-curl -x "$TELEGRAM_PROXY_URL" "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+telegram_curl_config="$(mktemp)"
+chmod 600 "$telegram_curl_config"
+trap 'rm -f "$telegram_curl_config"' EXIT
+
+cat > "$telegram_curl_config" <<EOF
+proxy = "$TELEGRAM_PROXY_URL"
+url = "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+silent
+show-error
+EOF
+
+curl --config "$telegram_curl_config"
+
+first_chat_id="${TELEGRAM_CHAT_IDS%%,*}"
+message="reverse_logger Telegram smoke test $(date -u +%FT%TZ)"
+
+cat > "$telegram_curl_config" <<EOF
+proxy = "$TELEGRAM_PROXY_URL"
+url = "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+request = "POST"
+data = "chat_id=${first_chat_id}"
+data-urlencode = "text=${message}"
+silent
+show-error
+EOF
+
+curl --config "$telegram_curl_config"
 ```
 
 ## 14. Smoke Test

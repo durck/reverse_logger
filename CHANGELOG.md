@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Harden Telegram alerts with fail-fast configuration validation, token-safe
+  error logging, transient send retries, delivery outbox dedupe, stable
+  alert IDs, and chat delivery smoke-test docs.
 - Add a token-protected read-only `rssh-logger` dashboard for enriched event
   journal summaries, filters, and recent sessions.
 - Show ingress host/domain and VPS IP metadata in dashboard recent sessions.

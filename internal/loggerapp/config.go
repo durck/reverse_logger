@@ -24,6 +24,11 @@ type Config struct {
 }
 
 func LoadConfig() (Config, error) {
+	telegramEnabled, err := parseBoolStrict("TELEGRAM_ENABLED", os.Getenv("TELEGRAM_ENABLED"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	correlation := store.DefaultCorrelationConfig()
 	correlation.WebhookMatchBefore = parseDurationOrDefault(os.Getenv("CORRELATION_WEBHOOK_MATCH_BEFORE"), correlation.WebhookMatchBefore)
 	correlation.WebhookMatchAfter = parseDurationOrDefault(os.Getenv("CORRELATION_WEBHOOK_MATCH_AFTER"), correlation.WebhookMatchAfter)
@@ -42,7 +47,7 @@ func LoadConfig() (Config, error) {
 		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
 		Correlation:      correlation,
 		Telegram: telegram.Config{
-			Enabled:  parseBool(os.Getenv("TELEGRAM_ENABLED")),
+			Enabled:  telegramEnabled,
 			BotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 			ChatIDs:  telegram.SplitChatIDs(os.Getenv("TELEGRAM_CHAT_IDS")),
 			ProxyURL: strings.TrimSpace(os.Getenv("TELEGRAM_PROXY_URL")),
@@ -53,6 +58,14 @@ func LoadConfig() (Config, error) {
 
 	if config.WebhookToken == "" {
 		return Config{}, errors.New("WEBHOOK_TOKEN is required")
+	}
+	if config.Telegram.Enabled {
+		if config.Telegram.BotToken == "" {
+			return Config{}, errors.New("TELEGRAM_BOT_TOKEN is required when TELEGRAM_ENABLED=true")
+		}
+		if len(config.Telegram.ChatIDs) == 0 {
+			return Config{}, errors.New("TELEGRAM_CHAT_IDS is required when TELEGRAM_ENABLED=true")
+		}
 	}
 	return config, nil
 }
@@ -70,6 +83,20 @@ func parseBool(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func parseBoolStrict(name, value string) (bool, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "":
+		return false, nil
+	case "1", "true", "yes", "y", "on", "enabled":
+		return true, nil
+	case "0", "false", "no", "n", "off", "disabled":
+		return false, nil
+	default:
+		return false, errors.New(name + " must be a boolean value")
 	}
 }
 

@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/durck/reverse_logger/internal/events"
@@ -25,6 +28,8 @@ type Server struct {
 	store            *store.Store
 	telegram         *telegram.Client
 }
+
+const telegramDeliveryClaimStaleAfter = 5 * time.Minute
 
 func NewServer(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client) *Server {
 	return NewServerWithIngressPaths(webhookToken, edgeForwardToken, store, telegramClient, events.DefaultWSPath, events.DefaultPushPath)
@@ -101,20 +106,29 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inserted && s.telegram.Enabled() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := s.telegram.NotifyEvent(ctx, event); err != nil {
-				log.Printf("telegram alert failed: %v", err)
-			}
-		}()
+	hadEnriched := false
+	if !inserted {
+		hadEnriched, err = s.store.HasEnrichedEvent(event.EventHash)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	enriched, enrichedInserted, err := s.store.EnrichAndStoreEvent(event)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if (inserted || (!hadEnriched && enrichedInserted)) && s.telegram.Enabled() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := s.notifyTelegramEvent(ctx, event); err != nil {
+				log.Printf("telegram alert failed: %v", err)
+			}
+		}()
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -125,6 +139,52 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"enriched_duplicate":  !enrichedInserted,
 		"correlation_status":  enriched.CorrelationStatus,
 	})
+}
+
+func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) error {
+	if !s.telegram.Enabled() {
+		return nil
+	}
+	status := strings.ToLower(event.Status)
+	if status != "connected" && status != "disconnected" {
+		return nil
+	}
+
+	message := telegram.FormatEventMessage(event)
+	chatIDs := s.telegram.ChatIDs()
+	errs := make([]error, len(chatIDs))
+	var wg sync.WaitGroup
+	for i, chatID := range chatIDs {
+		i, chatID := i, chatID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			claimed, err := s.store.ClaimTelegramDelivery(event.EventHash, chatID, telegramDeliveryClaimStaleAfter)
+			if err != nil {
+				errs[i] = fmt.Errorf("recipient %d delivery claim: %w", i+1, err)
+				return
+			}
+			if !claimed {
+				return
+			}
+
+			result, err := s.telegram.SendMessageWithResult(ctx, chatID, message)
+			if err != nil {
+				if markErr := s.store.MarkTelegramDeliveryFailed(event.EventHash, chatID, err); markErr != nil {
+					errs[i] = fmt.Errorf("recipient %d: %w", i+1, errors.Join(err, markErr))
+					return
+				}
+				errs[i] = fmt.Errorf("recipient %d: %w", i+1, err)
+				return
+			}
+			if err := s.store.MarkTelegramDeliverySent(event.EventHash, chatID, result.MessageID); err != nil {
+				errs[i] = fmt.Errorf("recipient %d delivery sent marker: %w", i+1, err)
+			}
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func (s *Server) handleEdgeEvent(w http.ResponseWriter, r *http.Request) {

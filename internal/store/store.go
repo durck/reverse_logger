@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -195,6 +196,19 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 	ingress_received_at TEXT,
 	raw_webhook_json TEXT,
 	raw_ingress_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS telegram_deliveries (
+	event_hash TEXT NOT NULL,
+	chat_id TEXT NOT NULL,
+	status TEXT NOT NULL CHECK(status IN ('sending', 'sent', 'failed')),
+	telegram_message_id INTEGER,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (event_hash, chat_id),
+	FOREIGN KEY (event_hash) REFERENCES events(event_hash) ON DELETE CASCADE
 );`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -415,6 +429,123 @@ func (s *Store) EnrichAndStoreEvent(event events.Event) (events.EnrichedEvent, b
 	enriched := events.NewEnrichedEventWithMethod(event, ingress, status, method)
 	inserted, err := s.InsertEnrichedEvent(enriched)
 	return enriched, inserted, err
+}
+
+func (s *Store) HasEnrichedEvent(sourceEventHash string) (bool, error) {
+	sourceEventHash = strings.TrimSpace(sourceEventHash)
+	if sourceEventHash == "" {
+		return false, nil
+	}
+	var exists int
+	err := s.db.QueryRow(`SELECT 1 FROM enriched_events WHERE source_event_hash = ? LIMIT 1`, sourceEventHash).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) ClaimTelegramDelivery(eventHash, chatID string, staleAfter time.Duration) (bool, error) {
+	eventHash = strings.TrimSpace(eventHash)
+	chatID = strings.TrimSpace(chatID)
+	if eventHash == "" {
+		return false, errors.New("telegram delivery event hash is required")
+	}
+	if chatID == "" {
+		return false, errors.New("telegram delivery chat ID is required")
+	}
+	if staleAfter <= 0 {
+		staleAfter = 5 * time.Minute
+	}
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	staleBefore := now.Add(-staleAfter).Format(time.RFC3339Nano)
+	res, err := s.db.Exec(`
+INSERT INTO telegram_deliveries (
+	event_hash, chat_id, status, telegram_message_id, attempts,
+	last_error, created_at, updated_at
+) VALUES (?, ?, 'sending', 0, 1, '', ?, ?)
+ON CONFLICT(event_hash, chat_id) DO UPDATE SET
+	status = 'sending',
+	attempts = telegram_deliveries.attempts + 1,
+	last_error = '',
+	updated_at = excluded.updated_at
+WHERE telegram_deliveries.status <> 'sent'
+  AND (
+    telegram_deliveries.status <> 'sending'
+    OR telegram_deliveries.updated_at < ?
+  )`,
+		eventHash,
+		chatID,
+		nowText,
+		nowText,
+		staleBefore,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (s *Store) MarkTelegramDeliverySent(eventHash, chatID string, messageID int) error {
+	eventHash = strings.TrimSpace(eventHash)
+	chatID = strings.TrimSpace(chatID)
+	if eventHash == "" {
+		return errors.New("telegram delivery event hash is required")
+	}
+	if chatID == "" {
+		return errors.New("telegram delivery chat ID is required")
+	}
+	_, err := s.db.Exec(`
+UPDATE telegram_deliveries
+SET status = 'sent',
+    telegram_message_id = ?,
+    last_error = '',
+    updated_at = ?
+WHERE event_hash = ? AND chat_id = ?`,
+		messageID,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		eventHash,
+		chatID,
+	)
+	return err
+}
+
+func (s *Store) MarkTelegramDeliveryFailed(eventHash, chatID string, deliveryErr error) error {
+	eventHash = strings.TrimSpace(eventHash)
+	chatID = strings.TrimSpace(chatID)
+	if eventHash == "" {
+		return errors.New("telegram delivery event hash is required")
+	}
+	if chatID == "" {
+		return errors.New("telegram delivery chat ID is required")
+	}
+	lastErr := ""
+	if deliveryErr != nil {
+		lastErr = strings.TrimSpace(deliveryErr.Error())
+	}
+	if len(lastErr) > 1024 {
+		lastErr = lastErr[:1024]
+	}
+	_, err := s.db.Exec(`
+UPDATE telegram_deliveries
+SET status = 'failed',
+    last_error = ?,
+    updated_at = ?
+WHERE event_hash = ? AND chat_id = ? AND status <> 'sent'`,
+		lastErr,
+		time.Now().UTC().Format(time.RFC3339Nano),
+		eventHash,
+		chatID,
+	)
+	return err
 }
 
 func (s *Store) InsertEnrichedEvent(event events.EnrichedEvent) (bool, error) {

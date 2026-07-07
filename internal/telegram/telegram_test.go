@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,6 +55,332 @@ func TestNotifyEventSendsMessage(t *testing.T) {
 	}
 }
 
+func TestNotifyEventContinuesAfterRecipientFailure(t *testing.T) {
+	seen := make(chan string, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		chatID := r.Form.Get("chat_id")
+		seen <- chatID
+		if chatID == "bad" {
+			writeTelegramError(w, http.StatusBadRequest, "chat not found")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"bad", "good"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event, err := events.ParseWebhookPayload([]byte(`{"Status":"connected","ID":"abc","HostName":"u.c","Timestamp":"2026-06-09T12:00:00Z"}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.NotifyEvent(context.Background(), event)
+	if err == nil {
+		t.Fatal("expected partial delivery error")
+	}
+
+	got := make(map[string]int)
+	for len(got) < 2 {
+		select {
+		case chatID := <-seen:
+			got[chatID]++
+		case <-time.After(time.Second):
+			t.Fatalf("not all recipients were attempted, seen=%v", got)
+		}
+	}
+	if got["bad"] != 1 || got["good"] != 1 {
+		t.Fatalf("expected both recipients to be attempted once, seen=%v", got)
+	}
+}
+
+func TestNotifyEventSendsRecipientsConcurrently(t *testing.T) {
+	seen := make(chan string, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		chatID := r.Form.Get("chat_id")
+		seen <- chatID
+		if chatID == "slow" {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"slow", "good"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event, err := events.ParseWebhookPayload([]byte(`{"Status":"connected","ID":"abc","HostName":"u.c","Timestamp":"2026-06-09T12:00:00Z"}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := client.NotifyEvent(ctx, event); err == nil {
+		t.Fatal("expected slow recipient to fail")
+	}
+
+	got := make(map[string]bool)
+	deadline := time.After(time.Second)
+	for len(got) < 2 {
+		select {
+		case chatID := <-seen:
+			got[chatID] = true
+		case <-deadline:
+			t.Fatalf("not all recipients were attempted, seen=%v", got)
+		}
+	}
+	if !got["slow"] || !got["good"] {
+		t.Fatalf("expected both recipients to be attempted, seen=%v", got)
+	}
+}
+
+func TestSendMessageRedactsTokenFromRequestError(t *testing.T) {
+	token := "123456:secret-token"
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: token,
+		ChatIDs:  []string{"123"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("failed posting to %s", req.URL.String())
+	})
+
+	err = client.SendMessage(context.Background(), "123", "hello")
+	if err == nil {
+		t.Fatal("expected request error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("error leaked bot token: %v", err)
+	}
+	if !strings.Contains(err.Error(), redactedTokenMarker) {
+		t.Fatalf("error did not include redaction marker: %v", err)
+	}
+}
+
+func TestSendMessageRejectsTelegramOKFalse(t *testing.T) {
+	calls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.SendMessage(context.Background(), "123", "hello")
+	if err == nil {
+		t.Fatal("expected Telegram ok=false response to fail")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("error missing Telegram description: %v", err)
+	}
+}
+
+func TestSendMessageRetriesTransientStatus(t *testing.T) {
+	calls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			writeTelegramError(w, http.StatusInternalServerError, "temporary failure")
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.SendMessage(context.Background(), "123", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestSendMessageWithResultReturnsMessageID(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":42}}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.SendMessageWithResult(context.Background(), "123", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != 42 {
+		t.Fatalf("message ID = %d, want 42", result.MessageID)
+	}
+}
+
+func TestNewValidatesEnabledConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{
+			name: "missing token",
+			config: Config{
+				Enabled: true,
+				ChatIDs: []string{"123"},
+			},
+			want: "bot token",
+		},
+		{
+			name: "missing chat IDs",
+			config: Config{
+				Enabled:  true,
+				BotToken: "token",
+				ChatIDs:  []string{" "},
+			},
+			want: "chat IDs",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.config)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestNewOnlyParsesProxyWhenEnabled(t *testing.T) {
+	if _, err := New(Config{ProxyURL: "://proxy-user:proxy-pass@example.com"}); err != nil {
+		t.Fatalf("disabled telegram should ignore proxy URL: %v", err)
+	}
+
+	_, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		ProxyURL: "://proxy-user:proxy-pass@example.com",
+	})
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+	if strings.Contains(err.Error(), "proxy-user") || strings.Contains(err.Error(), "proxy-pass") {
+		t.Fatalf("proxy error leaked credentials: %v", err)
+	}
+
+	_, err = New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		ProxyURL: "proxy.example.com:3128",
+	})
+	if err == nil {
+		t.Fatal("expected proxy URL without scheme to fail")
+	}
+
+	_, err = New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		ProxyURL: "ftp://proxy.example.com:21",
+	})
+	if err == nil {
+		t.Fatal("expected unsupported proxy URL scheme to fail")
+	}
+}
+
+func TestNewValidatesAPIBaseWhenEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		apiBase string
+		wantErr bool
+	}{
+		{name: "default", apiBase: "", wantErr: false},
+		{name: "https", apiBase: "https://botapi.example.com", wantErr: false},
+		{name: "loopback http", apiBase: "http://127.0.0.1:8081", wantErr: false},
+		{name: "localhost http", apiBase: "http://localhost:8081", wantErr: false},
+		{name: "missing scheme", apiBase: "api.telegram.org", wantErr: true},
+		{name: "ftp", apiBase: "ftp://api.telegram.org", wantErr: true},
+		{name: "remote http", apiBase: "http://botapi.example.com", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(Config{
+				Enabled:  true,
+				BotToken: "token",
+				ChatIDs:  []string{"123"},
+				APIBase:  tt.apiBase,
+			})
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestFormatEventMessageIncludesFields(t *testing.T) {
 	event, err := events.ParseWebhookPayload([]byte(`{"Status":"disconnected","ID":"abc","IP":"192.0.2.1:5555","HostName":"user.host","Version":"v1","Timestamp":"2026-06-09T12:00:00Z"}`), time.Date(2026, 6, 9, 12, 1, 0, 0, time.UTC))
 	if err != nil {
@@ -65,4 +392,15 @@ func TestFormatEventMessageIncludesFields(t *testing.T) {
 			t.Fatalf("message missing %q: %s", want, message)
 		}
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func writeTelegramError(w http.ResponseWriter, status int, description string) {
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `{"ok":false,"description":%q}`, description)
 }

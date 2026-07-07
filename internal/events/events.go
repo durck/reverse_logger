@@ -178,13 +178,13 @@ func eventFromClientState(state clientState, receivedAt time.Time, raw json.RawM
 
 func validateEvent(event Event) error {
 	if event.Status == "" {
-		return errors.New("Status is required")
+		return errors.New("status is required")
 	}
 	if event.ReverseSSHID == "" {
-		return errors.New("ID is required")
+		return errors.New("id is required")
 	}
 	if event.HostName == "" {
-		return errors.New("HostName is required")
+		return errors.New("host name is required")
 	}
 	return nil
 }

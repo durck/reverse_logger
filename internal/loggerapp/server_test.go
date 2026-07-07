@@ -1,6 +1,7 @@
 package loggerapp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/durck/reverse_logger/internal/events"
 	"github.com/durck/reverse_logger/internal/store"
 	"github.com/durck/reverse_logger/internal/telegram"
 )
@@ -78,6 +81,134 @@ func TestWebhookRejectsEmptyEvent(t *testing.T) {
 	server.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebhookRetrySendsTelegramAfterEnrichmentFailure(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	sent := make(chan string, 1)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		sent <- r.Form.Get("chat_id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+
+	tg, err := telegram.New(telegram.Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	enrichedPath := filepath.Join(dir, "enriched_events.jsonl")
+	if err := os.Mkdir(enrichedPath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"Status":"connected","ID":"abc","IP":"192.0.2.1:5555","HostName":"u.c","Timestamp":"2026-06-09T12:00:00Z"}`
+
+	req := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case chatID := <-sent:
+		t.Fatalf("unexpected alert after failed enrichment to chat %q", chatID)
+	default:
+	}
+
+	if err := os.Remove(enrichedPath); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(body))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case chatID := <-sent:
+		if chatID != "123" {
+			t.Fatalf("alert chat_id = %q", chatID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telegram alert was not sent after successful retry enrichment")
+	}
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestNotifyTelegramEventSkipsSentDelivery(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	sent := make(chan string, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		sent <- r.Form.Get("text")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77}}`))
+	}))
+	defer api.Close()
+
+	tg, err := telegram.New(telegram.Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	event, err := events.ParseWebhookPayload([]byte(`{"Status":"connected","ID":"abc","IP":"192.0.2.1:5555","HostName":"u.c","Timestamp":"2026-06-09T12:00:00Z"}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertEvent(event); err != nil || !inserted {
+		t.Fatalf("inserted=%v err=%v", inserted, err)
+	}
+
+	if err := server.notifyTelegramEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case text := <-sent:
+		if !strings.Contains(text, "alert_id: "+telegram.AlertID(event)) {
+			t.Fatalf("telegram text missing alert_id: %s", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telegram alert was not sent")
+	}
+
+	if err := server.notifyTelegramEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case text := <-sent:
+		t.Fatalf("duplicate telegram alert sent: %s", text)
+	default:
 	}
 }
 

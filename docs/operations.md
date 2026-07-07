@@ -224,8 +224,13 @@ No Telegram alert:
 
 1. Confirm the event status is `connected` or `disconnected`.
 2. Check `TELEGRAM_ENABLED=true`.
-3. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
-4. Check `docker compose logs rssh-logger`.
+3. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
+4. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
+5. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
+   prove the bot can write to that chat. Use a temporary `curl --config` file
+   as shown in `telegram-proxy.md` so tokens and proxy credentials are not
+   exposed in process arguments.
+6. Check `docker compose logs rssh-logger`.
 
 VPS cannot forward clients:
 
