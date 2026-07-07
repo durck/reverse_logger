@@ -112,6 +112,35 @@ Each VPS gets:
 
 ## Prerequisites (before Ansible)
 
+If the VPS edge hosts are created in Timeweb Cloud, provision them first with
+`deploy/terraform/timeweb-edge`. That Terraform workflow creates the `vps13` to
+`vps24` server definitions, supports both Terraform-managed and panel-created
+floating IPs, and prints an `inventory_hosts` output that maps each host to its
+Ansible group, public address, placeholder domain, VPN IP, Timeweb server ID,
+floating IP ID, and zone.
+
+Typical flow:
+
+```sh
+cd deploy/terraform/timeweb-edge
+export TWC_TOKEN='<Timeweb Cloud API token>'
+export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
+terraform init
+terraform plan -out plan.out
+terraform apply plan.out
+
+# Optional when floating IPs were created in the Timeweb panel:
+python3 scripts/get-floating-ip-ids.py
+terraform plan -out plan.out
+terraform apply plan.out
+
+terraform output -json inventory_hosts > /tmp/timeweb-edge-hosts.json
+```
+
+Use `/tmp/timeweb-edge-hosts.json` to fill `deploy/ansible/inventory.ini` or
+`inventory.yml`. Replace the `*.example.invalid` domains with real DNS names
+before running ACME tasks.
+
 On **each VPS**:
 
 1. Ubuntu with root SSH access.

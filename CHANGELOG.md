@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add Timeweb Terraform edge provisioning with floating IP output, API-based
+  floating IP discovery, and Ansible inventory documentation.
 - Harden Telegram alerts with fail-fast configuration validation, token-safe
   error logging, transient send retries, delivery outbox dedupe, stable
   alert IDs, and chat delivery smoke-test docs.

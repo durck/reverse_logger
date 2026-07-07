@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eux
+
+apt-get update -y
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  gcc wget make p7zip-full net-tools isc-dhcp-client
+
+install -d -m 700 /root/.ssh
+cat > /root/.ssh/authorized_keys <<'KEY'
+${ssh_public_key}
+KEY
+chmod 600 /root/.ssh/authorized_keys
