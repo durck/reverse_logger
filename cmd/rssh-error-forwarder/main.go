@@ -108,7 +108,10 @@ func scanLines(ctx context.Context, cfg config, reader io.Reader) error {
 			log.Printf("forward reverse_ssh error event failed: %v", err)
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 func postEvent(ctx context.Context, client *http.Client, endpoint string, event events.ReverseSSHErrorEvent) error {

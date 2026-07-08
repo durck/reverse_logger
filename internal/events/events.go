@@ -559,6 +559,8 @@ func ClassifyReverseSSHLogLine(line string) (reason, severity string, ok bool) {
 		return "auth_failed", "error", true
 	case hasAny("connect", "connection") && hasFailureWord:
 		return "connection_failed", "error", true
+	case strings.Contains(text, "multiplexing failed") && hasAny("unknown protocol", "failed to read header: eof"):
+		return "malformed_probe", "info", true
 	case hasFailureWord:
 		return "generic_error", "error", true
 	default:

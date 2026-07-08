@@ -233,20 +233,22 @@ func TestValidateIngressRouteAcceptsMultipleConfiguredPaths(t *testing.T) {
 
 func TestClassifyReverseSSHLogLine(t *testing.T) {
 	tests := []struct {
-		line string
-		want string
+		line     string
+		want     string
+		severity string
 	}{
-		{"public key fingerprint mismatch from 198.51.100.10:53000", "fingerprint_mismatch"},
-		{"tls: failed to verify certificate: x509 certificate has expired", "invalid_certificate"},
-		{"websocket handshake failed from 198.51.100.11:443", "handshake_failed"},
-		{"authentication rejected for operator", "auth_failed"},
+		{"public key fingerprint mismatch from 198.51.100.10:53000", "fingerprint_mismatch", "error"},
+		{"tls: failed to verify certificate: x509 certificate has expired", "invalid_certificate", "error"},
+		{"websocket handshake failed from 198.51.100.11:443", "handshake_failed", "error"},
+		{"authentication rejected for operator", "auth_failed", "error"},
+		{"Multiplexing failed (unwrapping): initial determination: unknown protocol", "malformed_probe", "info"},
 	}
 	for _, tt := range tests {
 		got, severity, ok := ClassifyReverseSSHLogLine(tt.line)
 		if !ok {
 			t.Fatalf("expected %q to classify", tt.line)
 		}
-		if got != tt.want || severity != "error" {
+		if got != tt.want || severity != tt.severity {
 			t.Fatalf("ClassifyReverseSSHLogLine(%q) = %q/%q", tt.line, got, severity)
 		}
 	}

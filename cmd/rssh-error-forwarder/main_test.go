@@ -47,8 +47,11 @@ func TestRunForwardsClassifiedStderrLines(t *testing.T) {
 
 	select {
 	case event := <-received:
-		if event.Reason != "generic_error" {
+		if event.Reason != "malformed_probe" {
 			t.Fatalf("reason = %q", event.Reason)
+		}
+		if event.Severity != "info" {
+			t.Fatalf("severity = %q", event.Severity)
 		}
 		if !strings.Contains(event.Message, "Multiplexing failed") {
 			t.Fatalf("message = %q", event.Message)

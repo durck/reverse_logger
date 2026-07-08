@@ -398,6 +398,9 @@ func (s *Server) notifyTelegramReverseSSHError(ctx context.Context, event events
 	if !s.telegram.Enabled() {
 		return nil
 	}
+	if event.Severity == "info" {
+		return nil
+	}
 
 	message := telegram.FormatReverseSSHErrorMessage(event)
 	chatIDs := s.telegram.ChatIDs()
