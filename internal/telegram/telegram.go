@@ -198,7 +198,7 @@ func (c *Client) SendFormattedMessageWithResult(ctx context.Context, chatID stri
 			if err == nil {
 				return result, nil
 			}
-			if !isRichMessageUnsupported(err) {
+			if !shouldFallbackFromRichMessage(err) {
 				return SendResult{}, err
 			}
 		}
@@ -959,6 +959,18 @@ func isRichMessageUnsupported(err error) bool {
 		(strings.Contains(body, "not found") ||
 			strings.Contains(body, "not available") ||
 			strings.Contains(body, "unsupported"))
+}
+
+func shouldFallbackFromRichMessage(err error) bool {
+	if isRichMessageUnsupported(err) {
+		return true
+	}
+	var statusErr *sendStatusError
+	if !errors.As(err, &statusErr) || statusErr.method != "sendRichMessage" {
+		return false
+	}
+	return statusErr.status == http.StatusBadRequest ||
+		statusErr.apiCode == http.StatusBadRequest
 }
 
 func telegramMethodName(method string) string {

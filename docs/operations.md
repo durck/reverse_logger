@@ -285,7 +285,8 @@ No Telegram alert:
 4. Check `TELEGRAM_ENABLED=true`.
 5. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
 6. If `TELEGRAM_ALERT_MODE=rich`, confirm the upstream Bot API supports
-   `sendRichMessage`; unsupported-method responses fall back to HTML alerts.
+   `sendRichMessage`; unsupported-method and rejected-rich-HTML responses fall
+   back to HTML alerts.
 7. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
 8. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
    prove the bot can write to that chat. Use a temporary `curl --config` file

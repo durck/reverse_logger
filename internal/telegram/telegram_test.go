@@ -410,6 +410,58 @@ func TestSendFormattedMessageFallsBackWhenRichUnsupported(t *testing.T) {
 	}
 }
 
+func TestSendFormattedMessageFallsBackWhenRichHTMLRejected(t *testing.T) {
+	paths := make([]string, 0, 2)
+	var fallbackText, fallbackParseMode string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/bottoken/sendRichMessage" {
+			writeTelegramError(w, http.StatusBadRequest, `Bad Request: can't parse rich message HTML`)
+			return
+		}
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		fallbackText = r.Form.Get("text")
+		fallbackParseMode = r.Form.Get("parse_mode")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":11}}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:   true,
+		BotToken:  "token",
+		ChatIDs:   []string{"123"},
+		APIBase:   api.URL,
+		AlertMode: string(AlertModeRich),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.SendFormattedMessageWithResult(context.Background(), "123", FormattedMessage{
+		Plain:    "plain alert",
+		HTML:     "<b>html alert</b>",
+		RichHTML: "<ul><li>rich alert</li></ul>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != 11 {
+		t.Fatalf("message ID = %d, want 11", result.MessageID)
+	}
+	if len(paths) != 2 || paths[0] != "/bottoken/sendRichMessage" || paths[1] != "/bottoken/sendMessage" {
+		t.Fatalf("paths = %#v", paths)
+	}
+	if fallbackParseMode != "HTML" || fallbackText != "<b>html alert</b>" {
+		t.Fatalf("unexpected fallback parse_mode=%q text=%q", fallbackParseMode, fallbackText)
+	}
+}
+
 func TestNewValidatesEnabledConfig(t *testing.T) {
 	tests := []struct {
 		name   string
