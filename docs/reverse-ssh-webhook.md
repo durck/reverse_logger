@@ -62,3 +62,19 @@ The logger stores:
 - `raw_json`
 
 `HostName` is split at the first dot. For `alice.workstation.lab`, `user_name=alice` and `computer_name=workstation.lab`.
+
+## Failed Attempt Journal Events
+
+Some failed connection attempts never become `connected`/`disconnected`
+webhook events. Run `rssh-error-forwarder` on the main host to read
+`reverse_ssh` journal lines, classify failures such as fingerprint mismatch,
+invalid certificate/x509, TLS handshake failure, auth failure, or generic
+connection errors, and POST them to:
+
+```text
+http://rssh-logger:8080/reverse-ssh-errors/<EDGE_FORWARD_TOKEN>
+```
+
+The central logger stores these in `reverse_ssh_errors`, appends
+`reverse_ssh_errors.jsonl`, shows them in the dashboard `Connection events`
+panel, and sends Telegram alerts when Telegram is enabled.

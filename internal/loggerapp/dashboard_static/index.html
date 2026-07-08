@@ -512,20 +512,25 @@
 
     .pill.connected,
     .pill.matched,
-    .pill.ok {
+    .pill.ok,
+    .pill.ingress,
+    .pill.info {
       background: #dcf4e8;
       color: #176344;
     }
 
     .pill.disconnected,
     .pill.ambiguous,
-    .pill.degraded {
+    .pill.degraded,
+    .pill.warning {
       background: #fff1d6;
       color: #8a570f;
     }
 
     .pill.unmatched,
-    .pill.down {
+    .pill.down,
+    .pill.error,
+    .pill.reverse_ssh_error {
       background: #fde7e4;
       color: #9a2219;
     }
@@ -689,6 +694,30 @@
       </section>
     </section>
 
+    <section id="system-events-panel" class="panel" aria-label="Connection events">
+      <div class="panel-head">
+        <div class="panel-title">Connection events</div>
+        <div id="system-event-count" class="panel-subtitle"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 168px;">Received</th>
+              <th style="width: 142px;">Type</th>
+              <th style="width: 116px;">Severity</th>
+              <th style="width: 178px;">Reason</th>
+              <th style="width: 230px;">Endpoint</th>
+              <th style="width: 240px;">Source</th>
+              <th style="width: 360px;">Message</th>
+            </tr>
+          </thead>
+          <tbody id="system-events-body"></tbody>
+        </table>
+        <div id="system-events-empty" class="empty" hidden>No connection events</div>
+      </div>
+    </section>
+
     <section id="active-panel" class="panel" aria-label="Active sessions">
       <div class="panel-head">
         <div class="panel-title">Active sessions</div>
@@ -760,6 +789,7 @@
       el("summary-section").classList.toggle("view-hidden", isHealthPage);
       el("secondary-summary-section").classList.toggle("view-hidden", isHealthPage);
       el("analytics-section").classList.toggle("view-hidden", isHealthPage);
+      el("system-events-panel").classList.toggle("view-hidden", isHealthPage);
       el("active-panel").classList.toggle("view-hidden", isHealthPage);
       el("recent-panel").classList.toggle("view-hidden", isHealthPage);
       el("health-panel").classList.toggle("health-compact", !isHealthPage);
@@ -785,6 +815,14 @@
       return p;
     }
 
+    function systemParams() {
+      const p = new URLSearchParams();
+      p.set("window", controls.window.value);
+      if (controls.search.value.trim()) p.set("q", controls.search.value.trim());
+      p.set("limit", "100");
+      return p;
+    }
+
     async function fetchJSON(url) {
       const response = await fetch(url, {
         credentials: "same-origin",
@@ -807,13 +845,15 @@
           text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
           return;
         }
-        const [overview, eventsPayload, healthPayload] = await Promise.all([
+        const [overview, eventsPayload, systemEventsPayload, healthPayload] = await Promise.all([
           fetchJSON(`/dashboard/api/overview?${params(false)}`),
           fetchJSON(`/dashboard/api/events?${params(true)}`),
+          fetchJSON(`/dashboard/api/system-events?${systemParams()}`),
           fetchJSON(`/dashboard/api/edge-health`)
         ]);
         renderOverview(overview);
         renderEvents(eventsPayload.events || []);
+        renderSystemEvents(systemEventsPayload.events || []);
         renderHealth(healthPayload);
         text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
       } catch (error) {
@@ -971,6 +1011,26 @@
       renderSessionTable(events, "events-body", "events-empty", "event-count");
     }
 
+    function renderSystemEvents(events) {
+      const targetBody = el("system-events-body");
+      targetBody.replaceChildren();
+      el("system-events-empty").hidden = events.length !== 0;
+      text("system-event-count", `${events.length} shown`);
+      for (const event of events) {
+        const row = document.createElement("tr");
+        row.append(
+          cell(formatTime(event.received_at), "mono"),
+          pillCell(event.kind),
+          pillCell(event.severity),
+          cell(event.reason || "-", "mono"),
+          stackCell(systemEventEndpointMain(event), systemEventEndpointSub(event), "mono"),
+          stackCell(event.source || "-", systemEventSourceSub(event), "mono"),
+          cell(event.message || "-", "mono")
+        );
+        targetBody.appendChild(row);
+      }
+    }
+
     function renderHealth(payload) {
       const summary = payload.summary || {};
       text("health-total", summary.total || 0);
@@ -1113,6 +1173,25 @@
 
     function vpsIP(event) {
       return event.vps_public_ip || event.forwarder_ip || event.vps_internal_ip || "-";
+    }
+
+    function systemEventEndpointMain(event) {
+      return event.remote_addr || event.client_ip || "-";
+    }
+
+    function systemEventEndpointSub(event) {
+      const parts = [];
+      if (event.transport) parts.push(String(event.transport).toUpperCase());
+      if (event.host) parts.push(event.host);
+      if (event.vps_name) parts.push(event.vps_name);
+      return parts.join(" / ") || "-";
+    }
+
+    function systemEventSourceSub(event) {
+      if (event.kind === "ingress") {
+        return `${event.method || "-"} ${event.uri || "-"}`;
+      }
+      return event.unit || event.fingerprint || "-";
     }
 
     function formatTime(value) {

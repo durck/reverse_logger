@@ -71,6 +71,25 @@ type IngressEvent struct {
 	RawJSON         json.RawMessage `json:"raw_json,omitempty"`
 }
 
+type ReverseSSHErrorEvent struct {
+	EventHash   string          `json:"event_hash"`
+	Source      string          `json:"source"`
+	Unit        string          `json:"unit,omitempty"`
+	Severity    string          `json:"severity"`
+	Reason      string          `json:"reason"`
+	Message     string          `json:"message"`
+	RemoteAddr  string          `json:"remote_addr,omitempty"`
+	RemoteIP    string          `json:"remote_ip,omitempty"`
+	RemotePort  int             `json:"remote_port,omitempty"`
+	Transport   string          `json:"transport,omitempty"`
+	Host        string          `json:"host,omitempty"`
+	Fingerprint string          `json:"fingerprint,omitempty"`
+	ObservedAt  time.Time       `json:"observed_at"`
+	ReceivedAt  time.Time       `json:"received_at"`
+	RawJSON     json.RawMessage `json:"raw_json,omitempty"`
+	RawLine     string          `json:"raw_line,omitempty"`
+}
+
 type EnrichedEvent struct {
 	EventHash            string          `json:"event_hash"`
 	SourceEventHash      string          `json:"source_event_hash"`
@@ -449,6 +468,160 @@ func HashIngressEvent(event IngressEvent) string {
 		event.NginxReceivedAt.UTC().Format(time.RFC3339Nano),
 	}
 	return hashStrings(parts...)
+}
+
+func NormalizeReverseSSHErrorEvent(event ReverseSSHErrorEvent, receivedAt time.Time) (ReverseSSHErrorEvent, error) {
+	event.Source = strings.TrimSpace(event.Source)
+	if event.Source == "" {
+		event.Source = "reverse_ssh"
+	}
+	event.Unit = strings.TrimSpace(event.Unit)
+	event.Severity = normalizeErrorSeverity(event.Severity)
+	event.Message = strings.TrimSpace(event.Message)
+	event.RemoteAddr = strings.TrimSpace(event.RemoteAddr)
+	event.RemoteIP = strings.TrimSpace(event.RemoteIP)
+	event.Transport = strings.ToLower(strings.TrimSpace(event.Transport))
+	event.Host = strings.TrimSpace(event.Host)
+	event.Fingerprint = strings.TrimSpace(event.Fingerprint)
+	event.RawLine = strings.TrimSpace(event.RawLine)
+	if event.Message == "" && event.RawLine != "" {
+		event.Message = event.RawLine
+	}
+	event.Reason = normalizeErrorReason(event.Reason, event.Message)
+	if event.Message == "" {
+		return ReverseSSHErrorEvent{}, errors.New("message is required")
+	}
+	if event.ObservedAt.IsZero() {
+		event.ObservedAt = receivedAt.UTC()
+	} else {
+		event.ObservedAt = event.ObservedAt.UTC()
+	}
+	if receivedAt.IsZero() {
+		receivedAt = time.Now()
+	}
+	event.ReceivedAt = receivedAt.UTC()
+	if event.RemoteAddr != "" {
+		event.RemoteIP, event.RemotePort = ParseEndpoint(event.RemoteAddr)
+	} else if event.RemoteIP != "" && event.RemotePort > 0 {
+		event.RemoteAddr = net.JoinHostPort(event.RemoteIP, strconv.Itoa(event.RemotePort))
+	}
+	if event.EventHash == "" {
+		event.EventHash = HashReverseSSHErrorEvent(event)
+	}
+	return event, nil
+}
+
+func NewReverseSSHErrorEventFromLogLine(source, unit, line string, observedAt, receivedAt time.Time) (ReverseSSHErrorEvent, bool) {
+	reason, severity, ok := ClassifyReverseSSHLogLine(line)
+	if !ok {
+		return ReverseSSHErrorEvent{}, false
+	}
+	event, err := NormalizeReverseSSHErrorEvent(ReverseSSHErrorEvent{
+		Source:     source,
+		Unit:       unit,
+		Severity:   severity,
+		Reason:     reason,
+		Message:    line,
+		RemoteAddr: FirstEndpointInText(line),
+		ObservedAt: observedAt,
+		RawLine:    line,
+	}, receivedAt)
+	if err != nil {
+		return ReverseSSHErrorEvent{}, false
+	}
+	return event, true
+}
+
+func ClassifyReverseSSHLogLine(line string) (reason, severity string, ok bool) {
+	text := strings.ToLower(strings.TrimSpace(line))
+	if text == "" {
+		return "", "", false
+	}
+
+	hasAny := func(values ...string) bool {
+		for _, value := range values {
+			if strings.Contains(text, value) {
+				return true
+			}
+		}
+		return false
+	}
+	hasFailureWord := hasAny("error", "fail", "failed", "failure", "invalid", "mismatch", "rejected", "denied", "refused", "timeout", "expired")
+
+	switch {
+	case strings.Contains(text, "fingerprint") && hasAny("mismatch", "does not match", "not match", "invalid", "unknown", "rejected"):
+		return "fingerprint_mismatch", "error", true
+	case hasAny("certificate", " cert ", "x509") && hasFailureWord:
+		return "invalid_certificate", "error", true
+	case hasAny("tls", "handshake") && hasFailureWord:
+		return "handshake_failed", "error", true
+	case hasAny("auth", "authenticate", "authorized key", "authorized_keys", "permission") && hasFailureWord:
+		return "auth_failed", "error", true
+	case hasAny("connect", "connection") && hasFailureWord:
+		return "connection_failed", "error", true
+	case hasFailureWord:
+		return "generic_error", "error", true
+	default:
+		return "", "", false
+	}
+}
+
+func FirstEndpointInText(text string) string {
+	for _, field := range strings.Fields(text) {
+		candidate := strings.Trim(field, `"'(){}<>,;`)
+		if candidate == "" {
+			continue
+		}
+		host, port := ParseEndpoint(candidate)
+		if host == "" || net.ParseIP(host) == nil {
+			continue
+		}
+		if port > 0 {
+			return candidate
+		}
+		return host
+	}
+	return ""
+}
+
+func HashReverseSSHErrorEvent(event ReverseSSHErrorEvent) string {
+	observedAt := event.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = event.ReceivedAt
+	}
+	return hashStrings(
+		event.Source,
+		event.Unit,
+		event.Severity,
+		event.Reason,
+		event.Message,
+		event.RemoteAddr,
+		observedAt.UTC().Format(time.RFC3339Nano),
+	)
+}
+
+func normalizeErrorSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "warning", "warn":
+		return "warning"
+	case "info":
+		return "info"
+	default:
+		return "error"
+	}
+}
+
+func normalizeErrorReason(reason, message string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	reason = strings.ReplaceAll(reason, "-", "_")
+	reason = strings.ReplaceAll(reason, " ", "_")
+	if reason != "" {
+		return reason
+	}
+	if classified, _, ok := ClassifyReverseSSHLogLine(message); ok {
+		return classified
+	}
+	return "generic_error"
 }
 
 func NewEnrichedEvent(event Event, ingress *IngressEvent, status string) EnrichedEvent {

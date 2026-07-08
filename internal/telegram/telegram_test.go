@@ -394,6 +394,25 @@ func TestFormatEventMessageIncludesFields(t *testing.T) {
 	}
 }
 
+func TestFormatReverseSSHErrorMessageIncludesFields(t *testing.T) {
+	event, err := events.NormalizeReverseSSHErrorEvent(events.ReverseSSHErrorEvent{
+		Source:     "journalctl",
+		Unit:       "reverse_ssh",
+		Message:    "public key fingerprint mismatch from 198.51.100.10:53000",
+		RemoteAddr: "198.51.100.10:53000",
+		ObservedAt: time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	}, time.Date(2026, 7, 8, 12, 0, 1, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := FormatReverseSSHErrorMessage(event)
+	for _, want := range []string{"reverse_ssh ERROR", "reason: fingerprint_mismatch", "remote: 198.51.100.10:53000", "source: journalctl", "unit: reverse_ssh", "alert_id: " + ReverseSSHErrorAlertID(event)} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message missing %q: %s", want, message)
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

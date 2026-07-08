@@ -15,12 +15,13 @@ import (
 )
 
 type Store struct {
-	db              *sql.DB
-	eventsPath      string
-	edgeLogPath     string
-	ingressLogPath  string
-	enrichedLogPath string
-	correlation     CorrelationConfig
+	db                     *sql.DB
+	eventsPath             string
+	edgeLogPath            string
+	ingressLogPath         string
+	reverseSSHErrorLogPath string
+	enrichedLogPath        string
+	correlation            CorrelationConfig
 }
 
 type CorrelationConfig struct {
@@ -83,12 +84,13 @@ func Open(dataDir string) (*Store, error) {
 	db.SetMaxIdleConns(1)
 
 	store := &Store{
-		db:              db,
-		eventsPath:      filepath.Join(dataDir, "events.jsonl"),
-		edgeLogPath:     filepath.Join(dataDir, "edge_events.jsonl"),
-		ingressLogPath:  filepath.Join(dataDir, "ingress_events.jsonl"),
-		enrichedLogPath: filepath.Join(dataDir, "enriched_events.jsonl"),
-		correlation:     DefaultCorrelationConfig(),
+		db:                     db,
+		eventsPath:             filepath.Join(dataDir, "events.jsonl"),
+		edgeLogPath:            filepath.Join(dataDir, "edge_events.jsonl"),
+		ingressLogPath:         filepath.Join(dataDir, "ingress_events.jsonl"),
+		reverseSSHErrorLogPath: filepath.Join(dataDir, "reverse_ssh_errors.jsonl"),
+		enrichedLogPath:        filepath.Join(dataDir, "enriched_events.jsonl"),
+		correlation:            DefaultCorrelationConfig(),
 	}
 
 	if err := store.init(); err != nil {
@@ -173,6 +175,26 @@ CREATE TABLE IF NOT EXISTS ingress_events (
 	raw_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS reverse_ssh_errors (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	event_hash TEXT NOT NULL UNIQUE,
+	source TEXT NOT NULL,
+	unit TEXT,
+	severity TEXT NOT NULL,
+	reason TEXT NOT NULL,
+	message TEXT NOT NULL,
+	remote_addr TEXT,
+	remote_ip TEXT,
+	remote_port INTEGER,
+	transport TEXT,
+	host TEXT,
+	fingerprint TEXT,
+	observed_at TEXT NOT NULL,
+	received_at TEXT NOT NULL,
+	raw_json TEXT,
+	raw_line TEXT
+);
+
 CREATE TABLE IF NOT EXISTS enriched_events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	event_hash TEXT NOT NULL UNIQUE,
@@ -216,6 +238,19 @@ CREATE TABLE IF NOT EXISTS telegram_deliveries (
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (event_hash, chat_id),
 	FOREIGN KEY (event_hash) REFERENCES events(event_hash) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS reverse_ssh_error_telegram_deliveries (
+	event_hash TEXT NOT NULL,
+	chat_id TEXT NOT NULL,
+	status TEXT NOT NULL CHECK(status IN ('sending', 'sent', 'failed')),
+	telegram_message_id INTEGER,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (event_hash, chat_id),
+	FOREIGN KEY (event_hash) REFERENCES reverse_ssh_errors(event_hash) ON DELETE CASCADE
 );`
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -259,6 +294,10 @@ CREATE TABLE IF NOT EXISTS telegram_deliveries (
 		"CREATE INDEX IF NOT EXISTS idx_ingress_vps_public_ip ON ingress_events(vps_public_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_ingress_forwarder_ip ON ingress_events(forwarder_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_ingress_client_ip ON ingress_events(client_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_reverse_ssh_errors_received_at ON reverse_ssh_errors(received_at)",
+		"CREATE INDEX IF NOT EXISTS idx_reverse_ssh_errors_observed_at ON reverse_ssh_errors(observed_at)",
+		"CREATE INDEX IF NOT EXISTS idx_reverse_ssh_errors_reason ON reverse_ssh_errors(reason)",
+		"CREATE INDEX IF NOT EXISTS idx_reverse_ssh_errors_remote_ip ON reverse_ssh_errors(remote_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_ingress_status ON enriched_events(ingress_event_hash, status)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_reverse_status ON enriched_events(reverse_ssh_id, status, correlation_status)",
 	}
@@ -428,6 +467,58 @@ INSERT OR IGNORE INTO ingress_events (
 	return true, nil
 }
 
+func (s *Store) InsertReverseSSHErrorEvent(event events.ReverseSSHErrorEvent) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
+INSERT OR IGNORE INTO reverse_ssh_errors (
+	event_hash, source, unit, severity, reason, message, remote_addr,
+	remote_ip, remote_port, transport, host, fingerprint, observed_at,
+	received_at, raw_json, raw_line
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.EventHash,
+		event.Source,
+		event.Unit,
+		event.Severity,
+		event.Reason,
+		event.Message,
+		event.RemoteAddr,
+		event.RemoteIP,
+		event.RemotePort,
+		event.Transport,
+		event.Host,
+		event.Fingerprint,
+		event.ObservedAt.UTC().Format(time.RFC3339Nano),
+		event.ReceivedAt.UTC().Format(time.RFC3339Nano),
+		string(event.RawJSON),
+		event.RawLine,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 0 {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if err := appendJSONL(s.reverseSSHErrorLogPath, event); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) EnrichAndStoreEvent(event events.Event) (events.EnrichedEvent, bool, error) {
 	ingress, status, method, err := s.findIngressForEvent(event)
 	if err != nil {
@@ -455,10 +546,18 @@ func (s *Store) HasEnrichedEvent(sourceEventHash string) (bool, error) {
 }
 
 func (s *Store) ClaimTelegramDelivery(eventHash, chatID string, staleAfter time.Duration) (bool, error) {
+	return s.claimTelegramDelivery("telegram_deliveries", "event", eventHash, chatID, staleAfter)
+}
+
+func (s *Store) ClaimReverseSSHErrorTelegramDelivery(eventHash, chatID string, staleAfter time.Duration) (bool, error) {
+	return s.claimTelegramDelivery("reverse_ssh_error_telegram_deliveries", "reverse_ssh error event", eventHash, chatID, staleAfter)
+}
+
+func (s *Store) claimTelegramDelivery(table, label, eventHash, chatID string, staleAfter time.Duration) (bool, error) {
 	eventHash = strings.TrimSpace(eventHash)
 	chatID = strings.TrimSpace(chatID)
 	if eventHash == "" {
-		return false, errors.New("telegram delivery event hash is required")
+		return false, errors.New("telegram delivery " + label + " hash is required")
 	}
 	if chatID == "" {
 		return false, errors.New("telegram delivery chat ID is required")
@@ -471,19 +570,19 @@ func (s *Store) ClaimTelegramDelivery(eventHash, chatID string, staleAfter time.
 	nowText := now.Format(time.RFC3339Nano)
 	staleBefore := now.Add(-staleAfter).Format(time.RFC3339Nano)
 	res, err := s.db.Exec(`
-INSERT INTO telegram_deliveries (
+INSERT INTO `+table+` (
 	event_hash, chat_id, status, telegram_message_id, attempts,
 	last_error, created_at, updated_at
 ) VALUES (?, ?, 'sending', 0, 1, '', ?, ?)
 ON CONFLICT(event_hash, chat_id) DO UPDATE SET
 	status = 'sending',
-	attempts = telegram_deliveries.attempts + 1,
+	attempts = `+table+`.attempts + 1,
 	last_error = '',
 	updated_at = excluded.updated_at
-WHERE telegram_deliveries.status <> 'sent'
+WHERE `+table+`.status <> 'sent'
   AND (
-    telegram_deliveries.status <> 'sending'
-    OR telegram_deliveries.updated_at < ?
+    `+table+`.status <> 'sending'
+    OR `+table+`.updated_at < ?
   )`,
 		eventHash,
 		chatID,
@@ -502,16 +601,24 @@ WHERE telegram_deliveries.status <> 'sent'
 }
 
 func (s *Store) MarkTelegramDeliverySent(eventHash, chatID string, messageID int) error {
+	return s.markTelegramDeliverySent("telegram_deliveries", "event", eventHash, chatID, messageID)
+}
+
+func (s *Store) MarkReverseSSHErrorTelegramDeliverySent(eventHash, chatID string, messageID int) error {
+	return s.markTelegramDeliverySent("reverse_ssh_error_telegram_deliveries", "reverse_ssh error event", eventHash, chatID, messageID)
+}
+
+func (s *Store) markTelegramDeliverySent(table, label, eventHash, chatID string, messageID int) error {
 	eventHash = strings.TrimSpace(eventHash)
 	chatID = strings.TrimSpace(chatID)
 	if eventHash == "" {
-		return errors.New("telegram delivery event hash is required")
+		return errors.New("telegram delivery " + label + " hash is required")
 	}
 	if chatID == "" {
 		return errors.New("telegram delivery chat ID is required")
 	}
 	_, err := s.db.Exec(`
-UPDATE telegram_deliveries
+UPDATE `+table+`
 SET status = 'sent',
     telegram_message_id = ?,
     last_error = '',
@@ -526,10 +633,18 @@ WHERE event_hash = ? AND chat_id = ?`,
 }
 
 func (s *Store) MarkTelegramDeliveryFailed(eventHash, chatID string, deliveryErr error) error {
+	return s.markTelegramDeliveryFailed("telegram_deliveries", "event", eventHash, chatID, deliveryErr)
+}
+
+func (s *Store) MarkReverseSSHErrorTelegramDeliveryFailed(eventHash, chatID string, deliveryErr error) error {
+	return s.markTelegramDeliveryFailed("reverse_ssh_error_telegram_deliveries", "reverse_ssh error event", eventHash, chatID, deliveryErr)
+}
+
+func (s *Store) markTelegramDeliveryFailed(table, label, eventHash, chatID string, deliveryErr error) error {
 	eventHash = strings.TrimSpace(eventHash)
 	chatID = strings.TrimSpace(chatID)
 	if eventHash == "" {
-		return errors.New("telegram delivery event hash is required")
+		return errors.New("telegram delivery " + label + " hash is required")
 	}
 	if chatID == "" {
 		return errors.New("telegram delivery chat ID is required")
@@ -542,7 +657,7 @@ func (s *Store) MarkTelegramDeliveryFailed(eventHash, chatID string, deliveryErr
 		lastErr = lastErr[:1024]
 	}
 	_, err := s.db.Exec(`
-UPDATE telegram_deliveries
+UPDATE `+table+`
 SET status = 'failed',
     last_error = ?,
     updated_at = ?

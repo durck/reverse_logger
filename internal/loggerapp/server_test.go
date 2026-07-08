@@ -434,6 +434,75 @@ func TestIngressEventEndpointStoresEvent(t *testing.T) {
 	}
 }
 
+func TestReverseSSHErrorEndpointStoresEventAndSendsTelegram(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	sent := make(chan string, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		sent <- r.Form.Get("text")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":42}}`))
+	}))
+	defer api.Close()
+
+	tg, err := telegram.New(telegram.Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	body := `{"source":"journalctl","unit":"reverse_ssh","message":"public key fingerprint mismatch from 198.51.100.10:53000","remote_addr":"198.51.100.10:53000","observed_at":"2026-07-08T12:00:00Z"}`
+	req := httptest.NewRequest(http.MethodPost, "/reverse-ssh-errors/edge-secret", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"reason":"fingerprint_mismatch"`) {
+		t.Fatalf("response missing reason: %s", rec.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "reverse_ssh_errors.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "fingerprint_mismatch") {
+		t.Fatalf("reverse_ssh error jsonl missing event: %s", string(content))
+	}
+	select {
+	case text := <-sent:
+		if !strings.Contains(text, "reverse_ssh ERROR") || !strings.Contains(text, "fingerprint_mismatch") {
+			t.Fatalf("unexpected telegram message: %s", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telegram alert was not sent")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/reverse-ssh-errors/edge-secret", strings.NewReader(body))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("duplicate status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case text := <-sent:
+		t.Fatalf("duplicate telegram alert sent: %s", text)
+	default:
+	}
+}
+
 func TestIngressEventEndpointRejectsWrongToken(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add failed `reverse_ssh` connection attempt events from journals, with
+  central storage, dashboard connection-event panel, Telegram alerts, and a
+  `rssh-error-forwarder` systemd service template.
 - Add VPS edge health push-agent monitoring with central health state,
   Telegram transition alerts, dashboard status, systemd units, and Ansible
   deployment wiring.

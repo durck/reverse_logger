@@ -103,6 +103,38 @@ func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleDashboardSystemEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !s.requireDashboardAuth(w, r) {
+		return
+	}
+
+	query := r.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	events, err := s.store.DashboardSystemEvents(ctx, store.DashboardSystemEventQuery{
+		Window:   parseDashboardWindow(query.Get("window")),
+		Kind:     query.Get("kind"),
+		Severity: query.Get("severity"),
+		Search:   query.Get("q"),
+		Limit:    limit,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events":    events,
+		"max_limit": store.MaxDashboardEventLimit,
+	})
+}
+
 func (s *Server) requireDashboardAuth(w http.ResponseWriter, r *http.Request) bool {
 	if strings.TrimSpace(s.dashboardToken) == "" {
 		writeError(w, http.StatusNotFound, "not found")

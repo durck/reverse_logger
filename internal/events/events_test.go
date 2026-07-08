@@ -230,3 +230,48 @@ func TestValidateIngressRouteAcceptsMultipleConfiguredPaths(t *testing.T) {
 		t.Fatal("expected unknown wss path to fail")
 	}
 }
+
+func TestClassifyReverseSSHLogLine(t *testing.T) {
+	tests := []struct {
+		line string
+		want string
+	}{
+		{"public key fingerprint mismatch from 198.51.100.10:53000", "fingerprint_mismatch"},
+		{"tls: failed to verify certificate: x509 certificate has expired", "invalid_certificate"},
+		{"websocket handshake failed from 198.51.100.11:443", "handshake_failed"},
+		{"authentication rejected for operator", "auth_failed"},
+	}
+	for _, tt := range tests {
+		got, severity, ok := ClassifyReverseSSHLogLine(tt.line)
+		if !ok {
+			t.Fatalf("expected %q to classify", tt.line)
+		}
+		if got != tt.want || severity != "error" {
+			t.Fatalf("ClassifyReverseSSHLogLine(%q) = %q/%q", tt.line, got, severity)
+		}
+	}
+
+	if _, _, ok := ClassifyReverseSSHLogLine("client connected successfully"); ok {
+		t.Fatal("success log line should not classify as an error")
+	}
+}
+
+func TestNormalizeReverseSSHErrorEvent(t *testing.T) {
+	receivedAt := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	event, err := NormalizeReverseSSHErrorEvent(ReverseSSHErrorEvent{
+		Message:    "public key fingerprint mismatch from 198.51.100.10:53000",
+		RemoteAddr: "198.51.100.10:53000",
+	}, receivedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Source != "reverse_ssh" || event.Severity != "error" || event.Reason != "fingerprint_mismatch" {
+		t.Fatalf("unexpected normalized event: %+v", event)
+	}
+	if event.RemoteIP != "198.51.100.10" || event.RemotePort != 53000 {
+		t.Fatalf("remote endpoint = %q/%d", event.RemoteIP, event.RemotePort)
+	}
+	if event.EventHash == "" {
+		t.Fatal("event hash is empty")
+	}
+}

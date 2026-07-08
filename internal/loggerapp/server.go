@@ -80,9 +80,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/edge/source-ip", s.handleSourceIP)
 	mux.HandleFunc("/edge/source-ip/", s.handleSourceIP)
 	mux.HandleFunc("/ingress-events/", s.handleIngressEvent)
+	mux.HandleFunc("/reverse-ssh-errors/", s.handleReverseSSHErrorEvent)
 	mux.HandleFunc("/dashboard", s.handleDashboardRoot)
 	mux.HandleFunc("/dashboard/api/overview", s.handleDashboardOverview)
 	mux.HandleFunc("/dashboard/api/events", s.handleDashboardEvents)
+	mux.HandleFunc("/dashboard/api/system-events", s.handleDashboardSystemEvents)
 	mux.HandleFunc("/dashboard/api/edge-health", s.handleDashboardEdgeHealth)
 	mux.HandleFunc("/dashboard/", s.handleDashboardPage)
 	return mux
@@ -338,6 +340,100 @@ func (s *Server) handleIngressEvent(w http.ResponseWriter, r *http.Request) {
 		"duplicate":  !inserted,
 		"reconciled": reconciled,
 	})
+}
+
+func (s *Server) handleReverseSSHErrorEvent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !tokenMatches(tokenFromPath(r.URL.Path, "/reverse-ssh-errors/"), s.edgeForwardToken) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	receivedAt := time.Now()
+	var event events.ReverseSSHErrorEvent
+	if err := json.Unmarshal(body, &event); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	event.RawJSON = append([]byte(nil), body...)
+	event, err = events.NormalizeReverseSSHErrorEvent(event, receivedAt)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	inserted, err := s.store.InsertReverseSSHErrorEvent(event)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if inserted && s.telegram.Enabled() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := s.notifyTelegramReverseSSHError(ctx, event); err != nil {
+				log.Printf("telegram reverse_ssh error alert failed: %v", err)
+			}
+		}()
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":     "accepted",
+		"event_hash": event.EventHash,
+		"duplicate":  !inserted,
+		"reason":     event.Reason,
+	})
+}
+
+func (s *Server) notifyTelegramReverseSSHError(ctx context.Context, event events.ReverseSSHErrorEvent) error {
+	if !s.telegram.Enabled() {
+		return nil
+	}
+
+	message := telegram.FormatReverseSSHErrorMessage(event)
+	chatIDs := s.telegram.ChatIDs()
+	errs := make([]error, len(chatIDs))
+	var wg sync.WaitGroup
+	for i, chatID := range chatIDs {
+		i, chatID := i, chatID
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			claimed, err := s.store.ClaimReverseSSHErrorTelegramDelivery(event.EventHash, chatID, telegramDeliveryClaimStaleAfter)
+			if err != nil {
+				errs[i] = fmt.Errorf("recipient %d delivery claim: %w", i+1, err)
+				return
+			}
+			if !claimed {
+				return
+			}
+
+			result, err := s.telegram.SendMessageWithResult(ctx, chatID, message)
+			if err != nil {
+				if markErr := s.store.MarkReverseSSHErrorTelegramDeliveryFailed(event.EventHash, chatID, err); markErr != nil {
+					errs[i] = fmt.Errorf("recipient %d: %w", i+1, errors.Join(err, markErr))
+					return
+				}
+				errs[i] = fmt.Errorf("recipient %d: %w", i+1, err)
+				return
+			}
+			if err := s.store.MarkReverseSSHErrorTelegramDeliverySent(event.EventHash, chatID, result.MessageID); err != nil {
+				errs[i] = fmt.Errorf("recipient %d delivery sent marker: %w", i+1, err)
+			}
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func tokenFromPath(path, prefix string) string {

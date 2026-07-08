@@ -59,6 +59,8 @@ systemd:
 ```sh
 systemctl status rssh-monitor
 journalctl -u rssh-monitor -n 100 --no-pager
+systemctl status rssh-error-forwarder
+journalctl -u rssh-error-forwarder -n 100 --no-pager
 systemctl status edge-health
 journalctl -u edge-health -n 100 --no-pager
 ```
@@ -87,6 +89,18 @@ tail -n 20 /opt/reverse-logger/data/logger/enriched_events.jsonl
 sqlite3 /opt/reverse-logger/data/logger/events.db \
   'select correlation_status, correlation_method, status, reverse_ssh_id, real_client_ip, transport, forwarder_ip, received_at from enriched_events order by id desc limit 20;'
 ```
+
+Failed `reverse_ssh` connection attempts forwarded from journals:
+
+```sh
+tail -n 20 /opt/reverse-logger/data/logger/reverse_ssh_errors.jsonl
+sqlite3 /opt/reverse-logger/data/logger/events.db \
+  'select severity, reason, remote_addr, message, observed_at from reverse_ssh_errors order by id desc limit 20;'
+```
+
+The dashboard `/dashboard/` page shows these rows in the `Connection events`
+panel together with raw ingress events. The API endpoint is
+`/dashboard/api/system-events?window=24h`.
 
 `correlation_method` explains how an ingress event was selected:
 
@@ -117,6 +131,7 @@ Stop writes briefly or use SQLite online backup tooling, then copy:
 /opt/reverse-logger/data/logger/events.jsonl
 /opt/reverse-logger/data/logger/edge_events.jsonl
 /opt/reverse-logger/data/logger/ingress_events.jsonl
+/opt/reverse-logger/data/logger/reverse_ssh_errors.jsonl
 /opt/reverse-logger/data/logger/enriched_events.jsonl
 ```
 
@@ -244,15 +259,19 @@ Dashboard not reachable:
 
 No Telegram alert:
 
-1. Confirm the event status is `connected` or `disconnected`.
-2. Check `TELEGRAM_ENABLED=true`.
-3. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
-4. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
-5. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
+1. For session webhooks, confirm the event status is `connected` or
+   `disconnected`.
+2. For failed attempt alerts, confirm `rssh-error-forwarder` is running and
+   `reverse_ssh_errors.jsonl` receives rows.
+3. Check `TELEGRAM_ENABLED=true`.
+4. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
+5. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
+6. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
    prove the bot can write to that chat. Use a temporary `curl --config` file
    as shown in `telegram-proxy.md` so tokens and proxy credentials are not
    exposed in process arguments.
-6. Check `docker compose logs rssh-logger`.
+7. Check `docker compose logs rssh-logger` and
+   `journalctl -u rssh-error-forwarder -n 100 --no-pager`.
 
 No VPS health alert:
 

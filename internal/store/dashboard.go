@@ -82,6 +82,30 @@ type DashboardEvent struct {
 	IngressReceivedAt    string `json:"ingress_received_at,omitempty"`
 }
 
+type DashboardSystemEvent struct {
+	ID            int64  `json:"id"`
+	Kind          string `json:"kind"`
+	Severity      string `json:"severity"`
+	Reason        string `json:"reason"`
+	Source        string `json:"source"`
+	Unit          string `json:"unit,omitempty"`
+	Message       string `json:"message"`
+	ClientIP      string `json:"client_ip,omitempty"`
+	ClientPort    int    `json:"client_port,omitempty"`
+	RemoteAddr    string `json:"remote_addr,omitempty"`
+	Transport     string `json:"transport,omitempty"`
+	Host          string `json:"host,omitempty"`
+	URI           string `json:"uri,omitempty"`
+	Method        string `json:"method,omitempty"`
+	VPSName       string `json:"vps_name,omitempty"`
+	VPSPublicIP   string `json:"vps_public_ip,omitempty"`
+	VPSInternalIP string `json:"vps_internal_ip,omitempty"`
+	ForwarderIP   string `json:"forwarder_ip,omitempty"`
+	Fingerprint   string `json:"fingerprint,omitempty"`
+	ObservedAt    string `json:"observed_at"`
+	ReceivedAt    string `json:"received_at"`
+}
+
 type DashboardEventQuery struct {
 	Window            time.Duration
 	Status            string
@@ -89,6 +113,14 @@ type DashboardEventQuery struct {
 	Transport         string
 	Search            string
 	Limit             int
+}
+
+type DashboardSystemEventQuery struct {
+	Window   time.Duration
+	Kind     string
+	Severity string
+	Search   string
+	Limit    int
 }
 
 func (s *Store) DashboardOverview(ctx context.Context, window time.Duration) (DashboardOverview, error) {
@@ -200,6 +232,118 @@ LIMIT ?`, args...)
 	events := make([]DashboardEvent, 0)
 	for rows.Next() {
 		event, err := scanDashboardEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) DashboardSystemEvents(ctx context.Context, query DashboardSystemEventQuery) ([]DashboardSystemEvent, error) {
+	bounds := dashboardBounds(query.Window)
+	limit := normalizeDashboardLimit(query.Limit)
+
+	args := []any{bounds.since, bounds.until}
+	conditions := []string{"received_at BETWEEN ? AND ?"}
+	if kind := strings.ToLower(strings.TrimSpace(query.Kind)); kind != "" {
+		conditions = append(conditions, "kind = ?")
+		args = append(args, kind)
+	}
+	if severity := strings.ToLower(strings.TrimSpace(query.Severity)); severity != "" {
+		conditions = append(conditions, "severity = ?")
+		args = append(args, severity)
+	}
+	if search := strings.ToLower(strings.TrimSpace(query.Search)); search != "" {
+		like := "%" + search + "%"
+		conditions = append(conditions, `(
+			lower(coalesce(source, '')) LIKE ?
+			OR lower(coalesce(unit, '')) LIKE ?
+			OR lower(coalesce(reason, '')) LIKE ?
+			OR lower(coalesce(message, '')) LIKE ?
+			OR lower(coalesce(client_ip, '')) LIKE ?
+			OR lower(coalesce(remote_addr, '')) LIKE ?
+			OR lower(coalesce(transport, '')) LIKE ?
+			OR lower(coalesce(host, '')) LIKE ?
+			OR lower(coalesce(uri, '')) LIKE ?
+			OR lower(coalesce(vps_name, '')) LIKE ?
+			OR lower(coalesce(vps_public_ip, '')) LIKE ?
+			OR lower(coalesce(vps_internal_ip, '')) LIKE ?
+			OR lower(coalesce(forwarder_ip, '')) LIKE ?
+			OR lower(coalesce(fingerprint, '')) LIKE ?
+		)`)
+		for i := 0; i < 14; i++ {
+			args = append(args, like)
+		}
+	}
+
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, `
+WITH system_events AS (
+	SELECT id,
+		'ingress' AS kind,
+		'info' AS severity,
+		'ingress' AS reason,
+		'nginx-ingress' AS source,
+		'' AS unit,
+		trim(coalesce(method, '') || ' ' || coalesce(uri, '')) AS message,
+		client_ip,
+		client_port,
+		CASE
+			WHEN coalesce(client_ip, '') <> '' AND coalesce(client_port, 0) > 0 THEN client_ip || ':' || client_port
+			ELSE coalesce(client_ip, '')
+		END AS remote_addr,
+		transport,
+		host,
+		uri,
+		method,
+		vps_name,
+		vps_public_ip,
+		vps_internal_ip,
+		forwarder_ip,
+		'' AS fingerprint,
+		nginx_received_at AS observed_at,
+		coalesce(nullif(forwarded_at, ''), nginx_received_at) AS received_at
+	FROM ingress_events
+	UNION ALL
+	SELECT id,
+		'reverse_ssh_error' AS kind,
+		severity,
+		reason,
+		source,
+		unit,
+		message,
+		remote_ip AS client_ip,
+		remote_port AS client_port,
+		remote_addr,
+		transport,
+		host,
+		'' AS uri,
+		'' AS method,
+		'' AS vps_name,
+		'' AS vps_public_ip,
+		'' AS vps_internal_ip,
+		'' AS forwarder_ip,
+		fingerprint,
+		observed_at,
+		received_at
+	FROM reverse_ssh_errors
+)
+SELECT id, kind, severity, reason, source, unit, message, client_ip, client_port,
+	remote_addr, transport, host, uri, method, vps_name, vps_public_ip,
+	vps_internal_ip, forwarder_ip, fingerprint, observed_at, received_at
+FROM system_events
+WHERE `+strings.Join(conditions, " AND ")+`
+ORDER BY received_at DESC, id DESC
+LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]DashboardSystemEvent, 0)
+	for rows.Next() {
+		event, err := scanDashboardSystemEvent(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -586,5 +730,54 @@ func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 	event.IngressHost = ingressHost.String
 	event.Version = version.String
 	event.IngressReceivedAt = ingressReceivedAt.String
+	return event, nil
+}
+
+func scanDashboardSystemEvent(row rowScanner) (DashboardSystemEvent, error) {
+	var event DashboardSystemEvent
+	var unit, message, clientIP, remoteAddr, transport, host, uri, method sql.NullString
+	var vpsName, vpsPublicIP, vpsInternalIP, forwarderIP, fingerprint sql.NullString
+	var clientPort sql.NullInt64
+	if err := row.Scan(
+		&event.ID,
+		&event.Kind,
+		&event.Severity,
+		&event.Reason,
+		&event.Source,
+		&unit,
+		&message,
+		&clientIP,
+		&clientPort,
+		&remoteAddr,
+		&transport,
+		&host,
+		&uri,
+		&method,
+		&vpsName,
+		&vpsPublicIP,
+		&vpsInternalIP,
+		&forwarderIP,
+		&fingerprint,
+		&event.ObservedAt,
+		&event.ReceivedAt,
+	); err != nil {
+		return DashboardSystemEvent{}, err
+	}
+	event.Unit = unit.String
+	event.Message = message.String
+	event.ClientIP = clientIP.String
+	if clientPort.Valid {
+		event.ClientPort = int(clientPort.Int64)
+	}
+	event.RemoteAddr = remoteAddr.String
+	event.Transport = transport.String
+	event.Host = host.String
+	event.URI = uri.String
+	event.Method = method.String
+	event.VPSName = vpsName.String
+	event.VPSPublicIP = vpsPublicIP.String
+	event.VPSInternalIP = vpsInternalIP.String
+	event.ForwarderIP = forwarderIP.String
+	event.Fingerprint = fingerprint.String
 	return event, nil
 }

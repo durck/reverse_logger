@@ -1,0 +1,26 @@
+[Unit]
+Description=reverse_ssh error journal forwarder
+After=network-online.target rssh-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/reverse-logger/rssh-error-forwarder.env
+ExecStart=/usr/local/bin/rssh-error-forwarder
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/run/log/journal /var/log/journal
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

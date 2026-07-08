@@ -107,6 +107,45 @@ func TestInsertEdgeEventRollsBackSQLiteWhenJSONLAppendFails(t *testing.T) {
 	}
 }
 
+func TestInsertReverseSSHErrorEventDedupesJSONLAndSQLite(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	event, err := events.NormalizeReverseSSHErrorEvent(events.ReverseSSHErrorEvent{
+		Source:     "journalctl",
+		Unit:       "reverse_ssh",
+		Message:    "public key fingerprint mismatch from 198.51.100.10:53000",
+		RemoteAddr: "198.51.100.10:53000",
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inserted, err := st.InsertReverseSSHErrorEvent(event)
+	if err != nil || !inserted {
+		t.Fatalf("first insert inserted=%v err=%v", inserted, err)
+	}
+	inserted, err = st.InsertReverseSSHErrorEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted {
+		t.Fatal("duplicate reverse_ssh error event was inserted")
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "reverse_ssh_errors.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := countLines(content); lines != 1 {
+		t.Fatalf("reverse_ssh_errors.jsonl lines = %d", lines)
+	}
+}
+
 func TestEnrichHandlesOldIngressRowsWithNullForwarderIP(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Open(dir)
@@ -340,6 +379,79 @@ func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 	}
 	if events[0].VPSPublicIP != "203.0.113.10" || events[0].IngressHost != "edge1.example.com" {
 		t.Fatalf("unexpected event: %+v", events[0])
+	}
+}
+
+func TestDashboardSystemEventsReturnsIngressAndReverseSSHErrors(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	ingress, err := events.NormalizeIngressEvent(events.IngressEvent{
+		Transport:       "wss",
+		VPSName:         "edge-1",
+		VPSPublicIP:     "203.0.113.10",
+		VPSInternalIP:   "10.0.0.10",
+		ClientIP:        "198.51.100.10",
+		ClientPort:      53000,
+		Host:            "edge1.example.com",
+		URI:             "/ws",
+		Method:          "GET",
+		Upgrade:         "websocket",
+		NginxReceivedAt: now.Add(-2 * time.Minute),
+	}, now.Add(-2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertIngressEvent(ingress); err != nil || !inserted {
+		t.Fatalf("insert ingress inserted=%v err=%v", inserted, err)
+	}
+
+	errorEvent, err := events.NormalizeReverseSSHErrorEvent(events.ReverseSSHErrorEvent{
+		Source:     "journalctl",
+		Unit:       "reverse_ssh",
+		Message:    "public key fingerprint mismatch from 198.51.100.99:53001",
+		RemoteAddr: "198.51.100.99:53001",
+		ObservedAt: now.Add(-time.Minute),
+	}, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertReverseSSHErrorEvent(errorEvent); err != nil || !inserted {
+		t.Fatalf("insert error inserted=%v err=%v", inserted, err)
+	}
+
+	systemEvents, err := st.DashboardSystemEvents(context.Background(), DashboardSystemEventQuery{
+		Window: 24 * time.Hour,
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemEvents) != 2 {
+		t.Fatalf("system events length = %d, events=%+v", len(systemEvents), systemEvents)
+	}
+	if systemEvents[0].Kind != "reverse_ssh_error" || systemEvents[0].Reason != "fingerprint_mismatch" {
+		t.Fatalf("newest system event = %+v", systemEvents[0])
+	}
+	if systemEvents[1].Kind != "ingress" || systemEvents[1].Host != "edge1.example.com" {
+		t.Fatalf("ingress system event = %+v", systemEvents[1])
+	}
+
+	filtered, err := st.DashboardSystemEvents(context.Background(), DashboardSystemEventQuery{
+		Window:   24 * time.Hour,
+		Severity: "error",
+		Search:   "fingerprint",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Kind != "reverse_ssh_error" {
+		t.Fatalf("filtered system events = %+v", filtered)
 	}
 }
 

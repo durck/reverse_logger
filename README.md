@@ -5,11 +5,14 @@ Deploy-ready repository for monitoring `reverse_ssh` session events without perf
 It contains:
 
 - `cmd/rssh-logger`: central webhook receiver for `reverse_ssh`.
+- `cmd/rssh-error-forwarder`: journal forwarder for failed `reverse_ssh`
+  connection attempts.
 - `cmd/edge-logger`: optional VPS TCP proxy logger for entrypoint logging.
 - `cmd/edge-health`: VPS health push-agent for VPN, main listener, logger,
   and local service checks.
 - Docker Compose for main-server services.
-- Embedded read-only `rssh-logger` dashboard for the central SQLite journal.
+- Embedded read-only `rssh-logger` dashboard for the central SQLite journal,
+  raw ingress events, and failed `reverse_ssh` attempts.
 - Local `reverse_ssh` image build helper that can clone a repository or use a
   manually prepared checkout.
 - systemd, SoftEther/DNAT, iptables, Ansible, and Telegram proxy examples.

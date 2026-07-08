@@ -1084,11 +1084,30 @@ sudo systemctl enable rssh-monitor
 sudo systemctl start rssh-monitor
 ```
 
+Optional failed-attempt journal forwarding from the main host:
+
+```sh
+go build -trimpath -ldflags="-s -w" -o /tmp/rssh-error-forwarder ./cmd/rssh-error-forwarder
+sudo install -m 0755 /tmp/rssh-error-forwarder /usr/local/bin/rssh-error-forwarder
+sudo cp deploy/systemd/rssh-error-forwarder.env.example /etc/reverse-logger/rssh-error-forwarder.env
+sudo nano /etc/reverse-logger/rssh-error-forwarder.env
+sudo cp deploy/systemd/rssh-error-forwarder.service /etc/systemd/system/rssh-error-forwarder.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now rssh-error-forwarder
+```
+
+Set `RSSH_ERROR_FORWARD_URL` to the main logger
+`/reverse-ssh-errors` endpoint and use the same `EDGE_FORWARD_TOKEN` value as
+the central logger. For Docker-based `reverse_ssh`, set
+`RSSH_JOURNAL_COMMAND=docker logs -f --since=0s reverse_ssh`.
+
 Check:
 
 ```sh
 systemctl status rssh-monitor
 journalctl -u rssh-monitor -n 100 --no-pager
+systemctl status rssh-error-forwarder
+journalctl -u rssh-error-forwarder -n 100 --no-pager
 ```
 
 ## Rollback

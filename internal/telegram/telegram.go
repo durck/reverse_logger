@@ -255,7 +255,46 @@ func FormatHealthAlertMessage(alert HealthAlert) string {
 	return strings.Join(lines, "\n")
 }
 
+func FormatReverseSSHErrorMessage(event events.ReverseSSHErrorEvent) string {
+	lines := []string{
+		fmt.Sprintf("reverse_ssh %s", strings.ToUpper(valueOrDash(event.Severity))),
+		fmt.Sprintf("reason: %s", valueOrDash(event.Reason)),
+		fmt.Sprintf("message: %s", valueOrDash(trimTelegramLine(event.Message, 1400))),
+		fmt.Sprintf("remote: %s", valueOrDash(firstNonEmpty(event.RemoteAddr, event.RemoteIP))),
+		fmt.Sprintf("transport: %s", valueOrDash(event.Transport)),
+		fmt.Sprintf("source: %s", valueOrDash(event.Source)),
+	}
+	if strings.TrimSpace(event.Unit) != "" {
+		lines = append(lines, "unit: "+strings.TrimSpace(event.Unit))
+	}
+	if strings.TrimSpace(event.Host) != "" {
+		lines = append(lines, "host: "+strings.TrimSpace(event.Host))
+	}
+	if strings.TrimSpace(event.Fingerprint) != "" {
+		lines = append(lines, "fingerprint: "+strings.TrimSpace(event.Fingerprint))
+	}
+	if alertID := ReverseSSHErrorAlertID(event); alertID != "" {
+		lines = append(lines, "alert_id: "+alertID)
+	}
+	if !event.ObservedAt.IsZero() {
+		lines = append(lines, "observed_at: "+event.ObservedAt.UTC().Format(time.RFC3339))
+	}
+	lines = append(lines, "received_at: "+event.ReceivedAt.UTC().Format(time.RFC3339))
+	return strings.Join(lines, "\n")
+}
+
 func AlertID(event events.Event) string {
+	eventHash := strings.TrimSpace(event.EventHash)
+	if eventHash == "" {
+		return ""
+	}
+	if len(eventHash) <= 12 {
+		return eventHash
+	}
+	return eventHash[:12]
+}
+
+func ReverseSSHErrorAlertID(event events.ReverseSSHErrorEvent) string {
 	eventHash := strings.TrimSpace(event.EventHash)
 	if eventHash == "" {
 		return ""
@@ -424,4 +463,24 @@ func valueOrDash(value string) string {
 		return "-"
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func trimTelegramLine(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return value[:limit]
+	}
+	return value[:limit-3] + "..."
 }
