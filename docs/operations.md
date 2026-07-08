@@ -117,6 +117,11 @@ ingress events. Use the page filters to hide `info` noise; the API endpoint is
 - `connected-history`: a `disconnected` webhook inherited the matched ingress
   metadata from the previous `connected` event with the same `reverse_ssh_id`.
 
+When several ingress candidates match the same method, the logger prefers a
+candidate whose timestamp is clearly nearest to the webhook timestamp. It keeps
+`ambiguous` when candidates are close enough that selecting one would be a
+guess.
+
 The logger records `forwarder_ip` from the HTTP source address of the
 `/ingress-events` request. This often recovers correlation when
 `VPS_INTERNAL_IP` is empty or set to the wrong VPS-side address.

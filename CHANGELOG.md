@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Prefer a clearly nearest ingress candidate during session correlation so
+  stale HTTPS captures in the same match window do not force `ambiguous`.
 - Suppress transient edge-health Telegram flaps by requiring two consecutive
   degraded reports before sending a degraded alert.
 - Add a configurable dashboard active-session stale cutoff to hide sessions

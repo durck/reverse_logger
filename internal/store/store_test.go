@@ -289,6 +289,74 @@ func TestEnrichHTTPSFallsBackWhenWebhookReportsProxyAsClient(t *testing.T) {
 	}
 }
 
+func TestEnrichHTTPSChoosesNearestIngressWhenOldCandidateIsInWindow(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Date(2026, 7, 8, 19, 49, 17, 0, time.UTC)
+	oldIngress, err := events.NormalizeIngressEvent(events.IngressEvent{
+		Transport:       "https",
+		VPSName:         "updatewebrtc",
+		VPSPublicIP:     "201.51.5.226",
+		ForwarderIP:     "201.51.5.226",
+		ClientIP:        "94.25.172.61",
+		ClientPort:      53000,
+		Host:            "updatewebrtc.ru",
+		URI:             "/push?key=old",
+		Method:          "HEAD",
+		PollingKeySHA1:  "1f8ac10f23c5b5bc1167bda84b833e5c057a77d2",
+		NginxReceivedAt: now.Add(-67 * time.Second),
+		ForwardedAt:     now.Add(-30 * time.Second),
+	}, now.Add(-30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertIngressEvent(oldIngress); err != nil || !inserted {
+		t.Fatalf("insert old ingress inserted=%v err=%v", inserted, err)
+	}
+
+	nearestIngress, err := events.NormalizeIngressEvent(events.IngressEvent{
+		Transport:       "https",
+		VPSName:         "updatewebrtc",
+		VPSPublicIP:     "201.51.5.226",
+		ForwarderIP:     "201.51.5.226",
+		ClientIP:        "212.73.99.133",
+		ClientPort:      55555,
+		Host:            "updatewebrtc.ru",
+		URI:             "/push?key=new",
+		Method:          "HEAD",
+		PollingKeySHA1:  "a9993e364706816aba3e25717850c26c9cd0d89d",
+		NginxReceivedAt: now.Add(-1 * time.Second),
+		ForwardedAt:     now.Add(-1 * time.Second),
+	}, now.Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertIngressEvent(nearestIngress); err != nil || !inserted {
+		t.Fatalf("insert nearest ingress inserted=%v err=%v", inserted, err)
+	}
+
+	webhook := []byte(`{"Status":"connected","ID":"abc","IP":"201.51.5.226:443","HostName":"wdc01-syorlov.danii.wdc01-syorlov","Transport":"https","Timestamp":"2026-07-08T19:49:17Z"}`)
+	event, err := events.ParseWebhookPayload(webhook, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched, _, err := st.EnrichAndStoreEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enriched.CorrelationStatus != "matched" || enriched.IngressEventHash != nearestIngress.EventHash {
+		t.Fatalf("expected nearest ingress match, got correlation=%s ingress=%s enriched=%+v", enriched.CorrelationStatus, enriched.IngressEventHash, enriched)
+	}
+	if enriched.RealClientIP != nearestIngress.ClientIP {
+		t.Fatalf("real client ip = %q, want %q", enriched.RealClientIP, nearestIngress.ClientIP)
+	}
+}
+
 func TestDashboardOverviewEmptyStoreReturnsZeroSummary(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

@@ -39,6 +39,9 @@ const (
 	httpsWebhookMatchAfter      = time.Minute
 	httpsIngressReconcileBefore = time.Minute
 	httpsIngressReconcileAfter  = 5 * time.Minute
+	ingressCandidateLimit       = 16
+	nearestIngressMaxDelta      = 15 * time.Second
+	nearestIngressMinLead       = 15 * time.Second
 )
 
 func DefaultCorrelationConfig() CorrelationConfig {
@@ -864,12 +867,12 @@ func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, s
 			condition += " AND client_ip = ?"
 			args = append(args, event.IPAddr)
 		}
-		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		candidates, err := s.findIngressCandidates(windows, condition, args, ingressCandidateLimit)
 		if err != nil {
 			return nil, "", "", err
 		}
 		if len(candidates) > 0 {
-			return resolveIngressCandidates(candidates, primaryMethod)
+			return resolveIngressCandidatesForEvent(candidates, primaryMethod, event)
 		}
 	}
 
@@ -880,12 +883,12 @@ func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, s
 			condition += " AND transport = ?"
 			args = append(args, event.Transport)
 		}
-		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		candidates, err := s.findIngressCandidates(windows, condition, args, ingressCandidateLimit)
 		if err != nil {
 			return nil, "", "", err
 		}
 		if len(candidates) > 0 {
-			return resolveIngressCandidates(candidates, "trusted-proxy-client-ip-fallback")
+			return resolveIngressCandidatesForEvent(candidates, "trusted-proxy-client-ip-fallback", event)
 		}
 	}
 
@@ -911,12 +914,12 @@ func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, s
 			condition = "transport = ?"
 			args = append(args, event.Transport)
 		}
-		candidates, err := s.findIngressCandidates(windows, condition, args, 2)
+		candidates, err := s.findIngressCandidates(windows, condition, args, ingressCandidateLimit)
 		if err != nil {
 			return nil, "", "", err
 		}
 		if len(candidates) > 0 {
-			return resolveIngressCandidates(candidates, "unique-time-fallback")
+			return resolveIngressCandidatesForEvent(candidates, "unique-time-fallback", event)
 		}
 	}
 
@@ -1056,15 +1059,100 @@ ORDER BY coalesce(nullif(forwarded_at, ''), nginx_received_at) DESC, nginx_recei
 	return candidates, rows.Err()
 }
 
-func resolveIngressCandidates(candidates []events.IngressEvent, method string) (*events.IngressEvent, string, string, error) {
+func resolveIngressCandidatesForEvent(candidates []events.IngressEvent, method string, event events.Event) (*events.IngressEvent, string, string, error) {
 	switch len(candidates) {
 	case 0:
 		return nil, "unmatched", "none", nil
 	case 1:
 		return &candidates[0], "matched", method, nil
 	default:
+		if candidate, ok := nearestIngressCandidate(candidates, event); ok {
+			return candidate, "matched", method, nil
+		}
 		return nil, "ambiguous", method, nil
 	}
+}
+
+func nearestIngressCandidate(candidates []events.IngressEvent, event events.Event) (*events.IngressEvent, bool) {
+	if !event.SourceTS.IsZero() {
+		if candidate, ok := nearestIngressCandidateByTimes(
+			candidates,
+			[]time.Time{event.SourceTS},
+			func(candidate events.IngressEvent) []time.Time {
+				return []time.Time{candidate.NginxReceivedAt}
+			},
+		); ok {
+			return candidate, true
+		}
+	}
+	return nearestIngressCandidateByTimes(
+		candidates,
+		[]time.Time{event.ReceivedAt},
+		func(candidate events.IngressEvent) []time.Time {
+			return []time.Time{candidate.ForwardedAt}
+		},
+	)
+}
+
+func nearestIngressCandidateByTimes(candidates []events.IngressEvent, eventTimes []time.Time, ingressTimes func(events.IngressEvent) []time.Time) (*events.IngressEvent, bool) {
+	bestIndex := -1
+	var bestDelta time.Duration
+	var secondDelta time.Duration
+	secondSet := false
+	for i, candidate := range candidates {
+		delta, ok := nearestDelta(eventTimes, ingressTimes(candidate))
+		if !ok {
+			continue
+		}
+		if bestIndex == -1 || delta < bestDelta {
+			if bestIndex != -1 {
+				secondDelta = bestDelta
+				secondSet = true
+			}
+			bestDelta = delta
+			bestIndex = i
+			continue
+		}
+		if !secondSet || delta < secondDelta {
+			secondDelta = delta
+			secondSet = true
+		}
+	}
+	if bestIndex == -1 || bestDelta > nearestIngressMaxDelta {
+		return nil, false
+	}
+	if secondSet && secondDelta-bestDelta < nearestIngressMinLead {
+		return nil, false
+	}
+	return &candidates[bestIndex], true
+}
+
+func nearestDelta(left, right []time.Time) (time.Duration, bool) {
+	var best time.Duration
+	ok := false
+	for _, l := range left {
+		if l.IsZero() {
+			continue
+		}
+		for _, r := range right {
+			if r.IsZero() {
+				continue
+			}
+			delta := absDuration(l.UTC().Sub(r.UTC()))
+			if !ok || delta < best {
+				best = delta
+				ok = true
+			}
+		}
+	}
+	return best, ok
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func eventIPPredicateForIngress(ingress events.IngressEvent) (string, []any) {
