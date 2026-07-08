@@ -339,6 +339,10 @@ func FormatEnrichedEventAlert(event events.EnrichedEvent) FormattedMessage {
 	title := fmt.Sprintf("reverse_ssh %s", strings.ToUpper(valueOrDash(event.Status)))
 	sourceHash := firstNonEmpty(event.SourceEventHash, event.EventHash)
 	alertID := shortAlertID(sourceHash)
+	correlation := ""
+	if shouldShowAlertCorrelation(event) {
+		correlation = correlationDisplay(event.CorrelationStatus, event.CorrelationMethod)
+	}
 
 	sections := []alertSection{
 		{
@@ -348,34 +352,26 @@ func FormatEnrichedEventAlert(event events.EnrichedEvent) FormattedMessage {
 				optionalAlertField("user", event.UserName),
 				optionalAlertField("computer", event.ComputerName),
 				requiredAlertField("id", event.ReverseSSHID),
-				optionalAlertField("version", event.Version),
 			},
 		},
 		{
 			Title: "Network",
 			Fields: []alertField{
+				optionalAlertField("real_ip", endpointDisplay(event.RealClientIP, event.ClientPort, "")),
 				optionalAlertField("ip", endpointDisplay(event.IPAddr, event.IPPort, event.IPRaw)),
-				optionalAlertField("real_client", endpointDisplay(event.RealClientIP, event.ClientPort, "")),
 				optionalAlertField("transport", event.Transport),
-				optionalAlertField("proxy_source_ip", event.ProxySourceIP),
-				optionalAlertField("fingerprint", event.PublicKeyFingerprint),
 			},
 		},
 		{
 			Title: "Ingress",
 			Fields: []alertField{
 				optionalAlertField("vps", event.VPSName),
-				optionalAlertField("vps_public_ip", event.VPSPublicIP),
-				optionalAlertField("vps_internal_ip", event.VPSInternalIP),
-				optionalAlertField("forwarder_ip", event.ForwarderIP),
-				requiredAlertField("correlation", correlationDisplay(event.CorrelationStatus, event.CorrelationMethod)),
+				optionalAlertField("correlation", correlation),
 			},
 		},
 		{
 			Title: "Timeline",
 			Fields: []alertField{
-				optionalAlertField("source_ts", formatTime(event.SourceTS)),
-				optionalAlertField("ingress_seen_at", formatTime(event.IngressReceivedAt)),
 				requiredAlertField("received_at", formatTime(event.ReceivedAt)),
 			},
 		},
@@ -388,6 +384,11 @@ func FormatEnrichedEventAlert(event events.EnrichedEvent) FormattedMessage {
 	}
 
 	return buildAlertMessage(title, sections)
+}
+
+func shouldShowAlertCorrelation(event events.EnrichedEvent) bool {
+	return !strings.EqualFold(strings.TrimSpace(event.CorrelationStatus), "matched") ||
+		strings.TrimSpace(event.RealClientIP) == ""
 }
 
 func FormatHealthAlertMessage(alert HealthAlert) string {
@@ -555,58 +556,32 @@ func buildHTMLAlert(title string, sections []alertSection) string {
 	builder.WriteString("<b>")
 	builder.WriteString(escapeTelegramHTML(strings.TrimSpace(title)))
 	builder.WriteString("</b>")
+	firstField := true
 	for _, section := range sections {
 		fields := visibleAlertFields(section.Fields)
 		if len(fields) == 0 {
 			continue
 		}
-		builder.WriteString("\n<blockquote>")
-		if strings.TrimSpace(section.Title) != "" {
-			builder.WriteString("<b>")
-			builder.WriteString(escapeTelegramHTML(strings.TrimSpace(section.Title)))
-			builder.WriteString("</b>\n")
-		}
-		for i, field := range fields {
-			if i > 0 {
+		for _, field := range fields {
+			if firstField {
+				builder.WriteString("\n<blockquote>")
+				firstField = false
+			} else {
 				builder.WriteString("\n")
 			}
 			builder.WriteString(escapeTelegramHTML(field.Label))
 			builder.WriteString(": ")
 			builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(field.Value))))
 		}
+	}
+	if !firstField {
 		builder.WriteString("</blockquote>")
 	}
 	return builder.String()
 }
 
 func buildRichHTMLAlert(title string, sections []alertSection) string {
-	var builder strings.Builder
-	builder.WriteString("<h3>")
-	builder.WriteString(escapeTelegramHTML(strings.TrimSpace(title)))
-	builder.WriteString("</h3>")
-	for _, section := range sections {
-		fields := visibleAlertFields(section.Fields)
-		if len(fields) == 0 {
-			continue
-		}
-		caption := strings.TrimSpace(section.Title)
-		builder.WriteString("\n<table bordered striped>")
-		if caption != "" {
-			builder.WriteString("<caption>")
-			builder.WriteString(escapeTelegramHTML(caption))
-			builder.WriteString("</caption>")
-		}
-		builder.WriteString("<tr><th>Field</th><th>Value</th></tr>")
-		for _, field := range fields {
-			builder.WriteString("<tr><td>")
-			builder.WriteString(escapeTelegramHTML(field.Label))
-			builder.WriteString("</td><td><code>")
-			builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(field.Value))))
-			builder.WriteString("</code></td></tr>")
-		}
-		builder.WriteString("</table>")
-	}
-	return builder.String()
+	return buildHTMLAlert(title, sections)
 }
 
 func visibleAlertFields(fields []alertField) []alertField {

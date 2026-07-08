@@ -554,6 +554,31 @@ func (s *Store) HasEnrichedEvent(sourceEventHash string) (bool, error) {
 	return true, nil
 }
 
+func (s *Store) GetEnrichedEvent(sourceEventHash string) (events.EnrichedEvent, bool, error) {
+	sourceEventHash = strings.TrimSpace(sourceEventHash)
+	if sourceEventHash == "" {
+		return events.EnrichedEvent{}, false, nil
+	}
+	row := s.db.QueryRow(`
+SELECT event_hash, source_event_hash, ingress_event_hash, correlation_status,
+	correlation_method, status, reverse_ssh_id, host_name, user_name, computer_name,
+	ip_raw, ip_addr, ip_port, real_client_ip, client_port, transport,
+	public_key_fingerprint, proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip,
+	forwarder_ip, version, source_ts, received_at, ingress_received_at,
+	raw_webhook_json, raw_ingress_json
+FROM enriched_events
+WHERE source_event_hash = ?
+LIMIT 1`, sourceEventHash)
+	event, err := scanEnrichedEvent(row)
+	if err == sql.ErrNoRows {
+		return events.EnrichedEvent{}, false, nil
+	}
+	if err != nil {
+		return events.EnrichedEvent{}, false, err
+	}
+	return event, true, nil
+}
+
 func (s *Store) ClaimTelegramDelivery(eventHash, chatID string, staleAfter time.Duration) (bool, error) {
 	return s.claimTelegramDelivery("telegram_deliveries", "event", eventHash, chatID, staleAfter)
 }
@@ -1266,6 +1291,92 @@ func appendJSONL(path string, value any) error {
 
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanEnrichedEvent(row rowScanner) (events.EnrichedEvent, error) {
+	var event events.EnrichedEvent
+	var ingressEventHash, correlationMethod, reverseSSHID, hostName, userName, computerName sql.NullString
+	var ipRaw, ipAddr, realClientIP, transport, publicKeyFingerprint, proxySourceIP sql.NullString
+	var vpsName, vpsPublicIP, vpsInternalIP, forwarderIP, version sql.NullString
+	var sourceTS, receivedAt, ingressReceivedAt, rawWebhookJSON, rawIngressJSON sql.NullString
+	var ipPort, clientPort sql.NullInt64
+	if err := row.Scan(
+		&event.EventHash,
+		&event.SourceEventHash,
+		&ingressEventHash,
+		&event.CorrelationStatus,
+		&correlationMethod,
+		&event.Status,
+		&reverseSSHID,
+		&hostName,
+		&userName,
+		&computerName,
+		&ipRaw,
+		&ipAddr,
+		&ipPort,
+		&realClientIP,
+		&clientPort,
+		&transport,
+		&publicKeyFingerprint,
+		&proxySourceIP,
+		&vpsName,
+		&vpsPublicIP,
+		&vpsInternalIP,
+		&forwarderIP,
+		&version,
+		&sourceTS,
+		&receivedAt,
+		&ingressReceivedAt,
+		&rawWebhookJSON,
+		&rawIngressJSON,
+	); err != nil {
+		return events.EnrichedEvent{}, err
+	}
+	event.IngressEventHash = ingressEventHash.String
+	event.CorrelationMethod = correlationMethod.String
+	event.ReverseSSHID = reverseSSHID.String
+	event.HostName = hostName.String
+	event.UserName = userName.String
+	event.ComputerName = computerName.String
+	event.IPRaw = ipRaw.String
+	event.IPAddr = ipAddr.String
+	if ipPort.Valid {
+		event.IPPort = int(ipPort.Int64)
+	}
+	event.RealClientIP = realClientIP.String
+	if clientPort.Valid {
+		event.ClientPort = int(clientPort.Int64)
+	}
+	event.Transport = transport.String
+	event.PublicKeyFingerprint = publicKeyFingerprint.String
+	event.ProxySourceIP = proxySourceIP.String
+	event.VPSName = vpsName.String
+	event.VPSPublicIP = vpsPublicIP.String
+	event.VPSInternalIP = vpsInternalIP.String
+	event.ForwarderIP = forwarderIP.String
+	event.Version = version.String
+	if sourceTS.Valid && sourceTS.String != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, sourceTS.String); err == nil {
+			event.SourceTS = parsed
+		}
+	}
+	if receivedAt.Valid && receivedAt.String != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, receivedAt.String); err == nil {
+			event.ReceivedAt = parsed
+		}
+	}
+	if ingressReceivedAt.Valid && ingressReceivedAt.String != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ingressReceivedAt.String); err == nil {
+			event.IngressReceivedAt = parsed
+		}
+	}
+	if rawWebhookJSON.Valid && rawWebhookJSON.String != "" {
+		event.RawWebhookJSON = []byte(rawWebhookJSON.String)
+	}
+	if rawIngressJSON.Valid && rawIngressJSON.String != "" {
+		event.RawIngressJSON = []byte(rawIngressJSON.String)
+	}
+	return event, nil
 }
 
 func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {

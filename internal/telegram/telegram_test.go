@@ -564,9 +564,8 @@ func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing
 		ReceivedAt:        time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
 	})
 	for _, want := range []string{
-		"real_client: 198.51.100.10:53000",
+		"real_ip: 198.51.100.10:53000",
 		"vps: edge-1",
-		"correlation: matched/nearest_time",
 		"alert_id: 1234567890ab",
 	} {
 		if !strings.Contains(message.Plain, want) {
@@ -576,8 +575,8 @@ func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing
 	if !strings.Contains(message.HTML, "user.&lt;host&gt;") {
 		t.Fatalf("html message did not escape host: %s", message.HTML)
 	}
-	if !strings.Contains(message.RichHTML, "<table bordered striped>") || !strings.Contains(message.RichHTML, "<caption>Ingress</caption>") {
-		t.Fatalf("rich message missing tables: %s", message.RichHTML)
+	if !strings.Contains(message.RichHTML, "<blockquote>") || strings.Contains(message.RichHTML, "<table") {
+		t.Fatalf("rich message should be compact blockquote without tables: %s", message.RichHTML)
 	}
 }
 

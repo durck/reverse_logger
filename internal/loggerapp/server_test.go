@@ -16,6 +16,15 @@ import (
 	"github.com/durck/reverse_logger/internal/telegram"
 )
 
+func setTelegramConnectedAlertDelay(t *testing.T, delay time.Duration) {
+	t.Helper()
+	previous := telegramConnectedAlertEnrichmentDelay
+	telegramConnectedAlertEnrichmentDelay = delay
+	t.Cleanup(func() {
+		telegramConnectedAlertEnrichmentDelay = previous
+	})
+}
+
 func TestWebhookStoresEvent(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -85,6 +94,8 @@ func TestWebhookRejectsEmptyEvent(t *testing.T) {
 }
 
 func TestWebhookRetrySendsTelegramAfterEnrichmentFailure(t *testing.T) {
+	setTelegramConnectedAlertDelay(t, time.Millisecond)
+
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -151,6 +162,75 @@ func TestWebhookRetrySendsTelegramAfterEnrichmentFailure(t *testing.T) {
 		t.Fatal("telegram alert was not sent after successful retry enrichment")
 	}
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestWebhookTelegramAlertWaitsForIngressCorrelation(t *testing.T) {
+	setTelegramConnectedAlertDelay(t, 100*time.Millisecond)
+
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	sent := make(chan string, 1)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		sent <- r.Form.Get("text")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77}}`))
+	}))
+	defer api.Close()
+
+	tg, err := telegram.New(telegram.Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"192.0.2.2:4444","HostName":"u.c","Timestamp":"2026-06-09T12:00:05Z","Transport":"wss"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"unmatched"`) {
+		t.Fatalf("expected initial unmatched response: %s", webhookRec.Body.String())
+	}
+
+	ingressBody := `{"transport":"wss","vps_name":"vps-1","vps_internal_ip":"192.0.2.2","client_ip":"198.51.100.10","client_port":5555,"uri":"/ws","method":"GET","upgrade":"websocket","nginx_received_at":"2026-06-09T12:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+	if !strings.Contains(ingressRec.Body.String(), `"reconciled":1`) {
+		t.Fatalf("expected one reconciled event: %s", ingressRec.Body.String())
+	}
+
+	select {
+	case text := <-sent:
+		for _, want := range []string{"real_ip: 198.51.100.10:5555", "vps: vps-1"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("telegram text missing %q: %s", want, text)
+			}
+		}
+		if strings.Contains(text, "correlation: unmatched") {
+			t.Fatalf("telegram text used stale unmatched enrichment: %s", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("telegram alert was not sent")
+	}
 }
 
 func TestNotifyTelegramEventSkipsSentDelivery(t *testing.T) {

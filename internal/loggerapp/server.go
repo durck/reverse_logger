@@ -32,6 +32,8 @@ type Server struct {
 
 const telegramDeliveryClaimStaleAfter = 5 * time.Minute
 
+var telegramConnectedAlertEnrichmentDelay = 750 * time.Millisecond
+
 func NewServer(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client) *Server {
 	return NewServerWithIngressPaths(webhookToken, edgeForwardToken, store, telegramClient, events.DefaultWSPath, events.DefaultPushPath)
 }
@@ -149,7 +151,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := s.notifyTelegramEnrichedEvent(ctx, enriched); err != nil {
+			if err := s.notifyTelegramEventAfterIngressSettle(ctx, event, enriched); err != nil {
 				log.Printf("telegram alert failed: %v", err)
 			}
 		}()
@@ -167,6 +169,39 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) error {
 	return s.notifyTelegramEnrichedEvent(ctx, events.NewEnrichedEvent(event, nil, ""))
+}
+
+func (s *Server) notifyTelegramEventAfterIngressSettle(ctx context.Context, event events.Event, enriched events.EnrichedEvent) error {
+	if shouldWaitForTelegramConnectedEnrichment(event, enriched) {
+		timer := time.NewTimer(telegramConnectedAlertEnrichmentDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		refreshed, _, err := s.store.EnrichAndStoreEvent(event)
+		if err != nil {
+			return fmt.Errorf("refresh enriched event before telegram alert: %w", err)
+		}
+		enriched = refreshed
+		persisted, ok, err := s.store.GetEnrichedEvent(event.EventHash)
+		if err != nil {
+			return fmt.Errorf("load refreshed enriched event before telegram alert: %w", err)
+		}
+		if ok {
+			enriched = persisted
+		}
+	}
+
+	return s.notifyTelegramEnrichedEvent(ctx, enriched)
+}
+
+func shouldWaitForTelegramConnectedEnrichment(event events.Event, enriched events.EnrichedEvent) bool {
+	return telegramConnectedAlertEnrichmentDelay > 0 &&
+		strings.EqualFold(strings.TrimSpace(event.Status), "connected") &&
+		strings.TrimSpace(enriched.RealClientIP) == ""
 }
 
 func (s *Server) notifyTelegramEnrichedEvent(ctx context.Context, event events.EnrichedEvent) error {
