@@ -476,6 +476,7 @@ func NormalizeReverseSSHErrorEvent(event ReverseSSHErrorEvent, receivedAt time.T
 		event.Source = "reverse_ssh"
 	}
 	event.Unit = strings.TrimSpace(event.Unit)
+	rawReason := event.Reason
 	event.Severity = normalizeErrorSeverity(event.Severity)
 	event.Message = strings.TrimSpace(event.Message)
 	event.RemoteAddr = strings.TrimSpace(event.RemoteAddr)
@@ -488,6 +489,16 @@ func NormalizeReverseSSHErrorEvent(event ReverseSSHErrorEvent, receivedAt time.T
 		event.Message = event.RawLine
 	}
 	event.Reason = normalizeErrorReason(event.Reason, event.Message)
+	if classifiedReason, classifiedSeverity, ok := ClassifyReverseSSHLogLine(event.Message); ok {
+		normalizedRawReason := normalizeErrorReasonToken(rawReason)
+		if normalizedRawReason == "" || normalizedRawReason == "generic_error" || event.Reason == classifiedReason {
+			event.Reason = classifiedReason
+			event.Severity = classifiedSeverity
+		}
+	}
+	if event.Reason == "malformed_probe" {
+		event.Severity = "info"
+	}
 	if event.Message == "" {
 		return ReverseSSHErrorEvent{}, errors.New("message is required")
 	}
@@ -559,7 +570,7 @@ func ClassifyReverseSSHLogLine(line string) (reason, severity string, ok bool) {
 		return "handshake_failed", "error", true
 	case hasAny("connect", "connection") && hasFailureWord:
 		return "connection_failed", "error", true
-	case strings.Contains(text, "multiplexing failed") && hasAny("unknown protocol", "failed to read header: eof"):
+	case strings.Contains(text, "multiplexing failed") && hasAny("unknown protocol", "failed to read header"):
 		return "malformed_probe", "info", true
 	case hasFailureWord:
 		return "generic_error", "error", true
@@ -614,9 +625,7 @@ func normalizeErrorSeverity(value string) string {
 }
 
 func normalizeErrorReason(reason, message string) string {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	reason = strings.ReplaceAll(reason, "-", "_")
-	reason = strings.ReplaceAll(reason, " ", "_")
+	reason = normalizeErrorReasonToken(reason)
 	if reason != "" {
 		return reason
 	}
@@ -624,6 +633,13 @@ func normalizeErrorReason(reason, message string) string {
 		return classified
 	}
 	return "generic_error"
+}
+
+func normalizeErrorReasonToken(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	reason = strings.ReplaceAll(reason, "-", "_")
+	reason = strings.ReplaceAll(reason, " ", "_")
+	return reason
 }
 
 func NewEnrichedEvent(event Event, ingress *IngressEvent, status string) EnrichedEvent {

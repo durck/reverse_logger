@@ -243,6 +243,7 @@ func TestClassifyReverseSSHLogLine(t *testing.T) {
 		{"authentication rejected for operator", "auth_failed", "error"},
 		{"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain", "auth_failed", "error"},
 		{"Multiplexing failed (unwrapping): initial determination: unknown protocol", "malformed_probe", "info"},
+		{"Multiplexing failed (unwrapping): initial determination: failed to read header: read tcp 172.18.0.3:2222->10.21.125.98:54216: i/o timeout", "malformed_probe", "info"},
 	}
 	for _, tt := range tests {
 		got, severity, ok := ClassifyReverseSSHLogLine(tt.line)
@@ -276,5 +277,20 @@ func TestNormalizeReverseSSHErrorEvent(t *testing.T) {
 	}
 	if event.EventHash == "" {
 		t.Fatal("event hash is empty")
+	}
+}
+
+func TestNormalizeReverseSSHErrorEventReclassifiesGenericProbe(t *testing.T) {
+	receivedAt := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
+	event, err := NormalizeReverseSSHErrorEvent(ReverseSSHErrorEvent{
+		Severity: "error",
+		Reason:   "generic_error",
+		Message:  "Multiplexing failed (unwrapping): initial determination: failed to read header: read tcp 172.18.0.3:2222->10.21.125.98:54216: i/o timeout",
+	}, receivedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Reason != "malformed_probe" || event.Severity != "info" {
+		t.Fatalf("unexpected normalized probe: %+v", event)
 	}
 }

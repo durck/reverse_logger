@@ -7,6 +7,8 @@
   `rssh-error-forwarder` systemd service template.
 - Classify `ssh: unable to authenticate` reverse_ssh journal failures as
   `auth_failed` before generic handshake failures.
+- Treat reverse_ssh multiplexing `failed to read header` probe timeouts as
+  dashboard-only malformed probes to avoid Telegram alert noise.
 - Keep the dashboard usable when one journal API panel fails by rendering
   successful panels and surfacing the failed endpoint in the status line.
 - Add VPS edge health push-agent monitoring with central health state,
