@@ -8,6 +8,24 @@ Central logger:
 docker compose exec rssh-logger wget -qO- http://127.0.0.1:8080/healthz
 ```
 
+VPS edge health overview, when `DASHBOARD_TOKEN` is set:
+
+```sh
+set -a
+. /opt/reverse-logger/.env
+set +a
+
+curl -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
+  "http://${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}/dashboard/api/edge-health"
+```
+
+On each VPS:
+
+```sh
+systemctl status edge-health --no-pager
+journalctl -u edge-health -n 100 --no-pager
+```
+
 Dashboard API, when `DASHBOARD_TOKEN` is set:
 
 ```sh
@@ -41,6 +59,8 @@ systemd:
 ```sh
 systemctl status rssh-monitor
 journalctl -u rssh-monitor -n 100 --no-pager
+systemctl status edge-health
+journalctl -u edge-health -n 100 --no-pager
 ```
 
 ## Durable Logs
@@ -231,6 +251,19 @@ No Telegram alert:
    as shown in `telegram-proxy.md` so tokens and proxy credentials are not
    exposed in process arguments.
 6. Check `docker compose logs rssh-logger`.
+
+No VPS health alert:
+
+1. Confirm `EDGE_HEALTH_TOKEN` is set on main and matches the VPS
+   `/etc/reverse-logger/edge-health.env`.
+2. Confirm the VPS service is active:
+   `systemctl is-active edge-health`.
+3. From the VPS, test the main logger health endpoint:
+   `curl http://<main_bind_ip>:8080/healthz`.
+4. From the VPS, test the reverse_ssh listener:
+   `nc -vz <main_bind_ip> <reverse_ssh_port>`.
+5. Check `/dashboard/api/edge-health` for `status`, `failed_checks`,
+   `last_seen_at`, and `stale_after`.
 
 VPS cannot forward clients:
 

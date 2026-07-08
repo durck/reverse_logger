@@ -37,6 +37,18 @@ type SendResult struct {
 	MessageID int
 }
 
+type HealthAlert struct {
+	VPSName        string
+	PreviousStatus string
+	Status         string
+	VPSPublicIP    string
+	VPSInternalIP  string
+	FailedChecks   []string
+	LastSeenAt     string
+	LastOKAt       string
+	AlertID        string
+}
+
 const (
 	defaultTimeout      = 5 * time.Second
 	maxSendAttempts     = 3
@@ -223,6 +235,23 @@ func FormatEventMessage(event events.Event) string {
 		lines = append(lines, "source_ts: "+event.SourceTS.UTC().Format(time.RFC3339))
 	}
 	lines = append(lines, "received_at: "+event.ReceivedAt.UTC().Format(time.RFC3339))
+	return strings.Join(lines, "\n")
+}
+
+func FormatHealthAlertMessage(alert HealthAlert) string {
+	lines := []string{
+		fmt.Sprintf("edge health %s", strings.ToUpper(valueOrDash(alert.Status))),
+		fmt.Sprintf("vps: %s", valueOrDash(alert.VPSName)),
+		fmt.Sprintf("previous: %s", valueOrDash(alert.PreviousStatus)),
+		fmt.Sprintf("public_ip: %s", valueOrDash(alert.VPSPublicIP)),
+		fmt.Sprintf("internal_ip: %s", valueOrDash(alert.VPSInternalIP)),
+		fmt.Sprintf("failed_checks: %s", valueOrDash(strings.Join(alert.FailedChecks, ","))),
+		fmt.Sprintf("last_seen_at: %s", valueOrDash(alert.LastSeenAt)),
+		fmt.Sprintf("last_ok_at: %s", valueOrDash(alert.LastOKAt)),
+	}
+	if strings.TrimSpace(alert.AlertID) != "" {
+		lines = append(lines, "alert_id: "+strings.TrimSpace(alert.AlertID))
+	}
 	return strings.Join(lines, "\n")
 }
 

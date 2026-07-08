@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add VPS edge health push-agent monitoring with central health state,
+  Telegram transition alerts, dashboard status, systemd units, and Ansible
+  deployment wiring.
 - Add Timeweb Terraform edge provisioning with floating IP output, API-based
   floating IP discovery, and Ansible inventory documentation.
 - Harden Telegram alerts with fail-fast configuration validation, token-safe

@@ -83,6 +83,14 @@
         rssh_random_path_chars: "{{ rssh_random_path_chars | default('ascii_lowercase,digits', true) }}"
         main_reverse_ssh_port: "{{ main_reverse_ssh_port | default(3232, true) }}"
         main_logger_port: "{{ main_logger_port | default(8080, true) }}"
+        edge_health_enabled: "{{ edge_health_enabled | default(true) }}"
+        edge_health_interval: "{{ edge_health_interval | default('30s', true) }}"
+        edge_health_timeout: "{{ edge_health_timeout | default('5s', true) }}"
+        edge_health_missed_reports: "{{ edge_health_missed_reports | default(3, true) }}"
+        edge_health_bootstrap_grace_seconds: "{{ edge_health_bootstrap_grace_seconds | default(120, true) }}"
+        edge_health_vpn_iface: "{{ edge_health_vpn_iface | default('vpn_softether', true) }}"
+        edge_health_softether_service: "{{ edge_health_softether_service | default('', true) }}"
+        edge_health_local_services: "{{ edge_health_local_services | default(['nginx', 'nginx-edge-forwarder'], true) }}"
       tags: always
 
     - name: Point /etc/resolv.conf at systemd-resolved runtime config
@@ -115,6 +123,17 @@
         - main_internal_ip | length > 0
         - edge_forward_url is not defined or edge_forward_url | length == 0
 
+    - name: Derive edge health URLs from main_internal_ip
+      ansible.builtin.set_fact:
+        edge_health_url: "{{ edge_health_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/edge-health', true) }}"
+        edge_health_expected_url: "{{ edge_health_expected_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/edge-health/expected', true) }}"
+        edge_health_logger_health_url: "{{ edge_health_logger_health_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/healthz', true) }}"
+        edge_health_reverse_ssh_addr: "{{ edge_health_reverse_ssh_addr | default(main_internal_ip ~ ':' ~ main_reverse_ssh_port, true) }}"
+      when:
+        - edge_health_enabled | bool
+        - main_internal_ip is defined
+        - main_internal_ip | length > 0
+
     - name: Derive vps_name from inventory hostname
       ansible.builtin.set_fact:
         vps_name: "{{ inventory_hostname }}"
@@ -124,6 +143,20 @@
       ansible.builtin.set_fact:
         vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_facts.get('default_ipv4', {}).get('address', ''), true) }}"
       when: vps_public_ip is not defined or vps_public_ip | length == 0
+
+    - name: Build edge health service check list
+      ansible.builtin.set_fact:
+        edge_health_effective_services: >-
+          {{
+            (
+              edge_health_local_services
+              + ([edge_health_softether_service] if (edge_health_softether_service | string | length > 0) else [])
+            )
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+      when: edge_health_enabled | bool
 
     - name: Extract backend and logger URL authorities
       ansible.builtin.set_fact:
@@ -231,6 +264,11 @@
           - edge_forward_token is defined
           - edge_forward_token | length > 20
           - edge_forward_token != 'replace_with_EDGE_FORWARD_TOKEN'
+          - not (edge_health_enabled | bool) or (edge_health_token is defined and edge_health_token | length > 20 and edge_health_token != 'replace_with_EDGE_HEALTH_TOKEN')
+          - not (edge_health_enabled | bool) or (edge_health_url is defined and edge_health_url | length > 0)
+          - not (edge_health_enabled | bool) or (edge_health_expected_url is defined and edge_health_expected_url | length > 0)
+          - not (edge_health_enabled | bool) or (edge_health_reverse_ssh_addr is defined and edge_health_reverse_ssh_addr | length > 0)
+          - not (edge_health_enabled | bool) or (edge_health_logger_health_url is defined and edge_health_logger_health_url | length > 0)
           - vps_name is defined
           - vps_public_ip is defined
           - vps_internal_ip | default('', true) | length == 0 or vps_internal_ip is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
@@ -1140,6 +1178,37 @@
         mode: "0755"
       notify: Restart nginx-edge-forwarder
 
+    - name: Build edge-health
+      ansible.builtin.command:
+        argv:
+          - go
+          - build
+          - -trimpath
+          - -ldflags
+          - -s -w
+          - -o
+          - /tmp/edge-health
+          - ./cmd/edge-health
+        chdir: "{{ reverse_logger_src_dir }}"
+      environment:
+        CGO_ENABLED: "0"
+        GOTOOLCHAIN: "{{ reverse_logger_go_toolchain }}"
+        GOPROXY: "{{ reverse_logger_go_effective_proxy }}"
+        GOSUMDB: "{{ reverse_logger_go_sumdb }}"
+      changed_when: false
+      when: edge_health_enabled | bool
+
+    - name: Install edge-health binary
+      ansible.builtin.copy:
+        remote_src: true
+        src: /tmp/edge-health
+        dest: /usr/local/bin/edge-health
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart edge-health
+      when: edge_health_enabled | bool
+
     - name: Create reverse_logger config directory
       ansible.builtin.file:
         path: /etc/reverse-logger
@@ -1605,6 +1674,19 @@
       no_log: true
       notify: Restart nginx-edge-forwarder
 
+    - name: Render edge-health environment
+      ansible.builtin.template:
+        src: edge-health.env.j2
+        dest: /etc/reverse-logger/edge-health.env
+        owner: root
+        group: root
+        mode: "0600"
+      vars:
+        edge_health_local_services: "{{ edge_health_effective_services | default([], true) }}"
+      no_log: true
+      notify: Restart edge-health
+      when: edge_health_enabled | bool
+
     - name: Install nginx-edge-forwarder systemd unit
       ansible.builtin.copy:
         remote_src: true
@@ -1616,6 +1698,19 @@
       notify:
         - Reload systemd
         - Restart nginx-edge-forwarder
+
+    - name: Install edge-health systemd unit
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ reverse_logger_src_dir }}/deploy/systemd/edge-health.service"
+        dest: /etc/systemd/system/edge-health.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart edge-health
+      when: edge_health_enabled | bool
 
     - name: Render nginx entrypoint configuration
       ansible.builtin.template:
@@ -1661,6 +1756,33 @@
         enabled: true
         state: started
 
+    - name: Enable and start edge-health
+      ansible.builtin.systemd:
+        name: edge-health
+        enabled: true
+        state: started
+      when: edge_health_enabled | bool
+
+    - name: Register expected VPS health node
+      ansible.builtin.uri:
+        url: "{{ edge_health_expected_url }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ edge_health_token }}"
+        body_format: json
+        body:
+          bootstrap_grace_seconds: "{{ edge_health_bootstrap_grace_seconds | int }}"
+          nodes:
+            - vps_name: "{{ vps_name }}"
+              vps_public_ip: "{{ vps_public_ip }}"
+              vps_internal_ip: "{{ vps_internal_ip | default('', true) }}"
+        status_code: 202
+        timeout: "{{ edge_health_timeout | regex_replace('s$', '') | int }}"
+      register: edge_health_expected_register
+      changed_when: false
+      no_log: true
+      when: edge_health_enabled | bool
+
   post_tasks:
     - name: Show edge deployment summary
       ansible.builtin.debug:
@@ -1672,6 +1794,7 @@
           - "ws_path={{ rssh_ws_path }}"
           - "push_path={{ rssh_push_path }}"
           - "download_path_prefix={{ rssh_download_path_prefix }}"
+          - "edge_health_enabled={{ edge_health_enabled | bool }}"
           - "trusted_proxy_cidr={{ ((vps_internal_ip | default('', true) | length) > 0) | ternary((vps_internal_ip | default('', true)) ~ '/32', 'not available') }}"
 
     - name: Build trusted proxy CIDR list for main server
@@ -1750,4 +1873,9 @@
     - name: Restart nginx-edge-forwarder
       ansible.builtin.systemd:
         name: nginx-edge-forwarder
+        state: restarted
+
+    - name: Restart edge-health
+      ansible.builtin.systemd:
+        name: edge-health
         state: restarted

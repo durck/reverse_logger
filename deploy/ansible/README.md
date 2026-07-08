@@ -15,10 +15,12 @@ The playbook owns the VPS edge layer only:
   Timeweb DNS-01 validation;
 - clones `reverse_logger`;
 - builds and installs `cmd/nginx-edge-forwarder`;
+- builds and installs `cmd/edge-health`;
 - creates state directories;
 - renders `/etc/reverse-logger/nginx-edge-forwarder.env` per host;
+- renders `/etc/reverse-logger/edge-health.env` per host;
 - renders nginx with custom WSS, HTTPS polling, and `/dl/` download paths;
-- enables and starts nginx and `nginx-edge-forwarder`.
+- enables and starts nginx, `nginx-edge-forwarder`, and `edge-health`.
 - optionally generates matching `reverse_ssh link` entries on main after the
   VPS edge hosts pass readiness checks.
 
@@ -108,7 +110,8 @@ Each VPS gets:
 - its own `rssh_domain` and Let's Encrypt certificate;
 - optional auto-detected `vps_internal_ip` from the main logger's observed
   source IP probe;
-- shared `main_internal_ip`, `edge_forward_token`, transport paths.
+- shared `main_internal_ip`, `edge_forward_token`, `edge_health_token`,
+  transport paths.
 
 ## Prerequisites (before Ansible)
 
@@ -157,7 +160,8 @@ On **each VPS**:
 On **main** (`/opt/reverse-logger`):
 
 1. Stack running with `docker-compose.edge-forward.yml`.
-2. `.env` contains `EDGE_FORWARD_TOKEN`, `REVERSE_SSH_BIND_IP`,
+2. `.env` contains `EDGE_FORWARD_TOKEN`, `EDGE_HEALTH_TOKEN`,
+   `REVERSE_SSH_BIND_IP`,
    `LOGGER_BIND_IP`, matching `INGRESS_*` and `REVERSE_SSH_*` paths. If
    `DASHBOARD_TOKEN` is set, keep it only in main `.env`; do not copy it into
    VPS inventory or group vars.
@@ -238,6 +242,7 @@ ansible-playbook ... --ask-pass
 ```yaml
 main_internal_ip: 192.0.2.10
 edge_forward_token: <from main .env>
+edge_health_token: <from main .env>
 redirect_target: https://example.com
 main_ws_path: /ws
 main_push_path: /push
@@ -547,6 +552,8 @@ failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 |----------|--------|
 | `backend_reverse_ssh_url` | `https://<main_internal_ip>:3232` |
 | `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events`; main compose must publish this with `LOGGER_BIND_IP=<main_internal_ip>` |
+| `edge_health_url` | `http://<main_internal_ip>:8080/edge-health` |
+| `edge_health_expected_url` | `http://<main_internal_ip>:8080/edge-health/expected` |
 | `vps_name` | inventory hostname |
 | `vps_public_ip` | `ansible_host` |
 | `vps_internal_ip` | optional `/edge/source-ip` response from main logger |
@@ -632,8 +639,9 @@ ansible-playbook reverse-ssh-links.yml
 Before creating anything, the playbook checks each `vps_edge` host:
 
 - `nginx -t` succeeds;
-- `nginx` and `nginx-edge-forwarder` are active;
+- `nginx`, `nginx-edge-forwarder`, and `edge-health` are active;
 - `/etc/reverse-logger/nginx-edge-forwarder.env` exists;
+- `/etc/reverse-logger/edge-health.env` exists;
 - `RSSH_WS_PATH` and `RSSH_PUSH_PATH` match the host/group variables;
 - certificate files exist when `reverse_ssh_link_check_tls_files: true`.
 
@@ -698,6 +706,7 @@ Verify each edge:
 
 ```sh
 ansible vps_edge -m shell -a 'systemctl is-active nginx nginx-edge-forwarder'
+ansible vps_edge -m shell -a 'systemctl is-active edge-health'
 curl -I https://entry1.example.com/dl/main
 ```
 
@@ -712,6 +721,7 @@ link -l
 
 ```sh
 ssh root@203.0.113.20 'systemctl status nginx nginx-edge-forwarder --no-pager'
+ssh root@203.0.113.20 'systemctl status edge-health --no-pager'
 ssh root@203.0.113.20 'grep VPS_INTERNAL_IP /etc/reverse-logger/nginx-edge-forwarder.env'
 ssh root@203.0.113.20 'curl -I https://entry1.example.com/not-a-path'
 ```
@@ -720,6 +730,7 @@ ssh root@203.0.113.20 'curl -I https://entry1.example.com/not-a-path'
 
 ```sh
 ansible vps_edge -b -m systemd -a 'name=nginx-edge-forwarder enabled=no state=stopped'
+ansible vps_edge -b -m systemd -a 'name=edge-health enabled=no state=stopped'
 ansible vps_edge -b -m file -a 'path=/etc/nginx/sites-enabled/rssh-entrypoint.conf state=absent'
 ansible vps_edge -b -m systemd -a 'name=nginx state=reloaded'
 ```

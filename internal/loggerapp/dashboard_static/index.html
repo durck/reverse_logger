@@ -186,6 +186,12 @@
       margin-bottom: 14px;
     }
 
+    .health-summary {
+      padding: 14px;
+      margin-bottom: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
     .shell > .panel:last-child {
       margin-bottom: 0;
     }
@@ -396,20 +402,28 @@
     }
 
     .pill.connected,
-    .pill.matched {
+    .pill.matched,
+    .pill.ok {
       background: #dcf4e8;
       color: #176344;
     }
 
     .pill.disconnected,
-    .pill.ambiguous {
+    .pill.ambiguous,
+    .pill.degraded {
       background: #fff1d6;
       color: #8a570f;
     }
 
-    .pill.unmatched {
+    .pill.unmatched,
+    .pill.down {
       background: #fde7e4;
       color: #9a2219;
+    }
+
+    .pill.unknown {
+      background: #edf1f6;
+      color: var(--unknown);
     }
 
     .empty {
@@ -488,6 +502,37 @@
       <div class="metric-chip"><span>Total</span><strong id="metric-total">0</strong><span id="metric-window">24h</span></div>
       <div class="metric-chip"><span>Matched</span><strong id="metric-matched">0</strong></div>
       <div class="metric-chip"><span>Ambiguous</span><strong id="metric-ambiguous">0</strong></div>
+    </section>
+
+    <section class="panel" aria-label="VPS health">
+      <div class="panel-head">
+        <div class="panel-title">VPS health</div>
+        <div id="health-updated" class="panel-subtitle"></div>
+      </div>
+      <section class="metric-strip health-summary" aria-label="VPS health summary">
+        <div class="metric-chip"><span>Total</span><strong id="health-total">0</strong></div>
+        <div class="metric-chip"><span>OK</span><strong id="health-ok">0</strong></div>
+        <div class="metric-chip"><span>Degraded</span><strong id="health-degraded">0</strong></div>
+        <div class="metric-chip"><span>Down</span><strong id="health-down">0</strong></div>
+        <div class="metric-chip"><span>Unknown</span><strong id="health-unknown">0</strong></div>
+      </section>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 150px;">VPS</th>
+              <th style="width: 112px;">Status</th>
+              <th style="width: 260px;">Failed checks</th>
+              <th style="width: 172px;">Last seen</th>
+              <th style="width: 172px;">Last OK</th>
+              <th style="width: 190px;">Network</th>
+              <th style="width: 172px;">Stale after</th>
+            </tr>
+          </thead>
+          <tbody id="health-body"></tbody>
+        </table>
+        <div id="health-empty" class="empty" hidden>No VPS health data</div>
+      </div>
     </section>
 
     <section class="grid">
@@ -614,12 +659,14 @@
       controls.refresh.disabled = true;
       text("statusline", "Loading");
       try {
-        const [overview, eventsPayload] = await Promise.all([
+        const [overview, eventsPayload, healthPayload] = await Promise.all([
           fetchJSON(`/dashboard/api/overview?${params(false)}`),
-          fetchJSON(`/dashboard/api/events?${params(true)}`)
+          fetchJSON(`/dashboard/api/events?${params(true)}`),
+          fetchJSON(`/dashboard/api/edge-health`)
         ]);
         renderOverview(overview);
         renderEvents(eventsPayload.events || []);
+        renderHealth(healthPayload);
         text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
       } catch (error) {
         text("statusline", error.message);
@@ -774,6 +821,34 @@
 
     function renderEvents(events) {
       renderSessionTable(events, "events-body", "events-empty", "event-count");
+    }
+
+    function renderHealth(payload) {
+      const summary = payload.summary || {};
+      text("health-total", summary.total || 0);
+      text("health-ok", summary.ok || 0);
+      text("health-degraded", summary.degraded || 0);
+      text("health-down", summary.down || 0);
+      text("health-unknown", summary.unknown || 0);
+      text("health-updated", payload.generated_at ? `Updated ${formatTime(payload.generated_at)}` : "");
+
+      const nodes = payload.nodes || [];
+      const targetBody = el("health-body");
+      targetBody.replaceChildren();
+      el("health-empty").hidden = nodes.length !== 0;
+      for (const node of nodes) {
+        const row = document.createElement("tr");
+        row.append(
+          stackCell(node.vps_name || "-", node.vps_public_ip || "-", "mono"),
+          pillCell(node.status || "unknown"),
+          cell((node.failed_checks || []).join(", ") || "-", "mono"),
+          cell(formatTime(node.last_seen_at), "mono"),
+          cell(formatTime(node.last_ok_at), "mono"),
+          stackCell(node.vps_public_ip || "-", node.vps_internal_ip || "-", "mono"),
+          cell(formatTime(node.stale_after), "mono")
+        );
+        targetBody.appendChild(row);
+      }
     }
 
     function renderSessionTable(events, bodyID, emptyID, countID) {

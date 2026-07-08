@@ -3,6 +3,7 @@ package loggerapp
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,11 +17,21 @@ type Config struct {
 	DataDir          string
 	WebhookToken     string
 	EdgeForwardToken string
+	EdgeHealthToken  string
 	DashboardToken   string
 	IngressWSPath    string
 	IngressPushPath  string
 	Correlation      store.CorrelationConfig
+	EdgeHealth       EdgeHealthConfig
 	Telegram         telegram.Config
+}
+
+type EdgeHealthConfig struct {
+	Token           string
+	DefaultInterval time.Duration
+	MissedReports   int
+	BootstrapGrace  time.Duration
+	MonitorInterval time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -42,10 +53,18 @@ func LoadConfig() (Config, error) {
 		DataDir:          envOrDefault("DATA_DIR", "/data"),
 		WebhookToken:     strings.TrimSpace(os.Getenv("WEBHOOK_TOKEN")),
 		EdgeForwardToken: strings.TrimSpace(os.Getenv("EDGE_FORWARD_TOKEN")),
+		EdgeHealthToken:  strings.TrimSpace(os.Getenv("EDGE_HEALTH_TOKEN")),
 		DashboardToken:   strings.TrimSpace(os.Getenv("DASHBOARD_TOKEN")),
 		IngressWSPath:    events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
 		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
 		Correlation:      correlation,
+		EdgeHealth: EdgeHealthConfig{
+			Token:           strings.TrimSpace(os.Getenv("EDGE_HEALTH_TOKEN")),
+			DefaultInterval: parseDurationOrDefault(os.Getenv("EDGE_HEALTH_DEFAULT_INTERVAL"), 30*time.Second),
+			MissedReports:   parsePositiveIntOrDefault(os.Getenv("EDGE_HEALTH_MISSED_REPORTS"), 3),
+			BootstrapGrace:  parseDurationOrDefault(os.Getenv("EDGE_HEALTH_BOOTSTRAP_GRACE"), store.DefaultEdgeHealthBootstrapGrace),
+			MonitorInterval: parseDurationOrDefault(os.Getenv("EDGE_HEALTH_MONITOR_INTERVAL"), 30*time.Second),
+		},
 		Telegram: telegram.Config{
 			Enabled:  telegramEnabled,
 			BotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
@@ -114,4 +133,12 @@ func parseDurationOrDefault(value string, fallback time.Duration) time.Duration 
 		return fallback
 	}
 	return duration
+}
+
+func parsePositiveIntOrDefault(value string, fallback int) int {
+	num, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || num <= 0 {
+		return fallback
+	}
+	return num
 }

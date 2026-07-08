@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS telegram_deliveries (
 			return err
 		}
 	}
-	return nil
+	return s.initEdgeHealth()
 }
 
 func (s *Store) InsertEvent(event events.Event) (bool, error) {

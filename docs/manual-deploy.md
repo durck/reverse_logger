@@ -105,9 +105,10 @@ Generate deployment tokens:
 ```sh
 WEBHOOK_TOKEN="$(openssl rand -hex 32)"
 EDGE_FORWARD_TOKEN="$(openssl rand -hex 32)"
+EDGE_HEALTH_TOKEN="$(openssl rand -hex 32)"
 DASHBOARD_TOKEN="$(openssl rand -hex 32)"
-printf 'WEBHOOK_TOKEN=%s\nEDGE_FORWARD_TOKEN=%s\nDASHBOARD_TOKEN=%s\n' \
-  "$WEBHOOK_TOKEN" "$EDGE_FORWARD_TOKEN" "$DASHBOARD_TOKEN"
+printf 'WEBHOOK_TOKEN=%s\nEDGE_FORWARD_TOKEN=%s\nEDGE_HEALTH_TOKEN=%s\nDASHBOARD_TOKEN=%s\n' \
+  "$WEBHOOK_TOKEN" "$EDGE_FORWARD_TOKEN" "$EDGE_HEALTH_TOKEN" "$DASHBOARD_TOKEN"
 ```
 
 Generate the operator SSH key that will be seeded into `reverse_ssh`
@@ -154,6 +155,9 @@ Set at minimum:
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token used by VPS nginx edge
   forwarders for central ingress events.
+- `EDGE_HEALTH_TOKEN`: token used by VPS health reporters. Keep it separate
+  from `EDGE_FORWARD_TOKEN` so ingress forwarding and health reporting can be
+  rotated independently.
 - `DASHBOARD_TOKEN`: optional read-only dashboard token. Leave it empty to
   disable `/dashboard`. Browser access uses HTTP Basic Auth with any username
   and this value as the password.
@@ -449,6 +453,8 @@ Install the edge forwarder:
 ```sh
 go build -trimpath -ldflags="-s -w" -o /tmp/nginx-edge-forwarder ./cmd/nginx-edge-forwarder
 sudo install -m 0755 /tmp/nginx-edge-forwarder /usr/local/bin/nginx-edge-forwarder
+go build -trimpath -ldflags="-s -w" -o /tmp/edge-health ./cmd/edge-health
+sudo install -m 0755 /tmp/edge-health /usr/local/bin/edge-health
 ```
 
 Create the forwarder config and edit all VPS-specific values:
@@ -456,7 +462,9 @@ Create the forwarder config and edit all VPS-specific values:
 ```sh
 sudo mkdir -p /etc/reverse-logger
 sudo cp deploy/systemd/nginx-edge-forwarder.env.example /etc/reverse-logger/nginx-edge-forwarder.env
+sudo cp deploy/systemd/edge-health.env.example /etc/reverse-logger/edge-health.env
 sudo nano /etc/reverse-logger/nginx-edge-forwarder.env
+sudo nano /etc/reverse-logger/edge-health.env
 ```
 
 Set at minimum:
@@ -466,6 +474,20 @@ Set at minimum:
 - `EDGE_FORWARD_TOKEN`: `EDGE_FORWARD_TOKEN` from the main `.env`.
 - `VPS_NAME`, `VPS_PUBLIC_IP`, `VPS_INTERNAL_IP`.
 - `RSSH_WS_PATH` and `RSSH_PUSH_PATH`, matching the main `.env`.
+
+For `edge-health.env`, set at minimum:
+
+- `EDGE_HEALTH_FORWARD_URL`: central health URL, normally
+  `http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/edge-health`.
+- `EDGE_HEALTH_TOKEN`: `EDGE_HEALTH_TOKEN` from the main `.env`.
+- `EDGE_HEALTH_REVERSE_SSH_ADDR`:
+  `<REVERSE_SSH_BIND_IP>:<REVERSE_SSH_BIND_PORT>`.
+- `EDGE_HEALTH_LOGGER_HEALTH_URL`:
+  `http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/healthz`.
+- `EDGE_HEALTH_VPN_IFACE`: SoftEther interface, for example `vpn_softether`;
+  leave empty only if connectivity checks are enough for that VPS.
+- `EDGE_HEALTH_SYSTEMD_SERVICES`: comma-separated local services to verify,
+  normally `nginx,nginx-edge-forwarder`.
 
 `VPS_INTERNAL_IP` should be the source IP observed by the main server, not the
 VPS interface address. You can read it from the main logger by calling
@@ -477,6 +499,7 @@ Install the systemd unit, but start it only after nginx is configured:
 
 ```sh
 sudo cp deploy/systemd/nginx-edge-forwarder.service /etc/systemd/system/nginx-edge-forwarder.service
+sudo cp deploy/systemd/edge-health.service /etc/systemd/system/edge-health.service
 sudo mkdir -p /var/lib/reverse-logger/nginx-edge-spool
 sudo chmod 750 /var/lib/reverse-logger /var/lib/reverse-logger/nginx-edge-spool
 sudo systemctl daemon-reload
@@ -596,6 +619,7 @@ sudo nano /etc/nginx/sites-available/rssh-entrypoint.conf
 sudo nginx -t
 sudo systemctl reload nginx
 sudo systemctl enable --now nginx-edge-forwarder
+sudo systemctl enable --now edge-health
 ```
 
 In the final config, set:
@@ -1083,6 +1107,7 @@ VPS:
 sudo iptables -t nat -F RSSH_VPS_PREROUTING || true
 sudo iptables -t nat -F RSSH_VPS_POSTROUTING || true
 sudo iptables -F RSSH_VPS_FORWARD || true
+sudo systemctl disable --now edge-health || true
 sudo netfilter-persistent save
 ```
 
@@ -1091,4 +1116,4 @@ Then remove or disable:
 - VPS DNAT/firewall rules;
 - SoftEther account/session for affected VPS nodes;
 - Telegram proxy credentials;
-- any manually installed `edge-logger` systemd units.
+- any manually installed `edge-logger` or `edge-health` systemd units.

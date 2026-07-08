@@ -22,6 +22,7 @@ import (
 type Server struct {
 	webhookToken     string
 	edgeForwardToken string
+	edgeHealth       EdgeHealthConfig
 	dashboardToken   string
 	ingressWSPath    string
 	ingressPushPath  string
@@ -40,13 +41,30 @@ func NewServerWithIngressPaths(webhookToken, edgeForwardToken string, store *sto
 }
 
 func NewServerWithDashboardToken(webhookToken, edgeForwardToken string, store *store.Store, telegramClient *telegram.Client, ingressWSPath, ingressPushPath, dashboardToken string) *Server {
+	return NewServerWithDashboardTokenAndEdgeHealth(webhookToken, edgeForwardToken, EdgeHealthConfig{}, store, telegramClient, ingressWSPath, ingressPushPath, dashboardToken)
+}
+
+func NewServerWithDashboardTokenAndEdgeHealth(webhookToken, edgeForwardToken string, edgeHealth EdgeHealthConfig, st *store.Store, telegramClient *telegram.Client, ingressWSPath, ingressPushPath, dashboardToken string) *Server {
+	if edgeHealth.DefaultInterval <= 0 {
+		edgeHealth.DefaultInterval = 30 * time.Second
+	}
+	if edgeHealth.MissedReports <= 0 {
+		edgeHealth.MissedReports = 3
+	}
+	if edgeHealth.BootstrapGrace <= 0 {
+		edgeHealth.BootstrapGrace = store.DefaultEdgeHealthBootstrapGrace
+	}
+	if edgeHealth.MonitorInterval <= 0 {
+		edgeHealth.MonitorInterval = 30 * time.Second
+	}
 	return &Server{
 		webhookToken:     webhookToken,
 		edgeForwardToken: edgeForwardToken,
+		edgeHealth:       edgeHealth,
 		dashboardToken:   strings.TrimSpace(dashboardToken),
 		ingressWSPath:    events.NormalizeIngressPath(ingressWSPath, events.DefaultWSPath),
 		ingressPushPath:  events.NormalizeIngressPath(ingressPushPath, events.DefaultPushPath),
-		store:            store,
+		store:            st,
 		telegram:         telegramClient,
 	}
 }
@@ -56,12 +74,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/hooks/", s.handleWebhook)
 	mux.HandleFunc("/edge-events/", s.handleEdgeEvent)
+	mux.HandleFunc("/edge-health/", s.handleEdgeHealthReport)
+	mux.HandleFunc("/edge-health/expected/", s.handleEdgeHealthExpected)
 	mux.HandleFunc("/edge/source-ip", s.handleSourceIP)
 	mux.HandleFunc("/edge/source-ip/", s.handleSourceIP)
 	mux.HandleFunc("/ingress-events/", s.handleIngressEvent)
 	mux.HandleFunc("/dashboard", s.handleDashboardRoot)
 	mux.HandleFunc("/dashboard/api/overview", s.handleDashboardOverview)
 	mux.HandleFunc("/dashboard/api/events", s.handleDashboardEvents)
+	mux.HandleFunc("/dashboard/api/edge-health", s.handleDashboardEdgeHealth)
 	mux.HandleFunc("/dashboard/", s.handleDashboardPage)
 	return mux
 }

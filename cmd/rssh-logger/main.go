@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
@@ -28,7 +29,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := loggerapp.NewServerWithDashboardToken(config.WebhookToken, config.EdgeForwardToken, st, tg, config.IngressWSPath, config.IngressPushPath, config.DashboardToken)
+	server := loggerapp.NewServerWithDashboardTokenAndEdgeHealth(config.WebhookToken, config.EdgeForwardToken, config.EdgeHealth, st, tg, config.IngressWSPath, config.IngressPushPath, config.DashboardToken)
+	go server.StartEdgeHealthMonitor(context.Background())
 	log.Printf("rssh-logger listening on %s", config.ListenAddr)
 	httpServer := &http.Server{
 		Addr:              config.ListenAddr,

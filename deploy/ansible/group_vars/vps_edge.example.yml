@@ -41,6 +41,18 @@ main_push_path: /push
 
 edge_forward_token: replace_with_EDGE_FORWARD_TOKEN
 
+edge_health_enabled: true
+edge_health_token: replace_with_EDGE_HEALTH_TOKEN
+edge_health_interval: 30s
+edge_health_timeout: 5s
+edge_health_missed_reports: 3
+edge_health_bootstrap_grace_seconds: 120
+edge_health_vpn_iface: vpn_softether
+edge_health_softether_service: ""
+edge_health_local_services:
+  - nginx
+  - nginx-edge-forwarder
+
 rssh_download_path_prefix: /dl
 
 # Optional: generate per-host public paths once and persist them locally in
