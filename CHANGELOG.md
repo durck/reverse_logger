@@ -11,6 +11,8 @@
   dashboard-only malformed probes to avoid Telegram alert noise.
 - Move dashboard connection events to a dedicated `/dashboard/connections`
   page with type, severity, and search filters.
+- Match dashboard sessions to a single time-window ingress candidate even when
+  webhook proxy metadata contradicts VPS/client IP fields.
 - Keep the dashboard usable when one journal API panel fails by rendering
   successful panels and surfacing the failed endpoint in the status line.
 - Add VPS edge health push-agent monitoring with central health state,

@@ -199,6 +199,50 @@ INSERT INTO ingress_events (
 	}
 }
 
+func TestEnrichFallsBackToUniqueIngressWhenProxyMetadataDoesNotMatch(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Date(2026, 7, 8, 13, 50, 33, 0, time.UTC)
+	ingress, err := events.NormalizeIngressEvent(events.IngressEvent{
+		Transport:       "wss",
+		VPSName:         "edge-1",
+		ClientIP:        "198.51.100.10",
+		ClientPort:      53000,
+		Host:            "glonastracking.ru",
+		URI:             "/ws",
+		Method:          "GET",
+		Upgrade:         "websocket",
+		NginxReceivedAt: now.Add(-2 * time.Second),
+	}, now.Add(-2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertIngressEvent(ingress); err != nil || !inserted {
+		t.Fatalf("insert ingress inserted=%v err=%v", inserted, err)
+	}
+
+	webhook := []byte(`{"Status":"connected","ID":"abc","IP":"10.21.125.98:55644","HostName":"lab.administrator.ws10","Transport":"wss","ProxySourceIP":"203.0.113.20:443","Timestamp":"2026-07-08T13:50:33Z"}`)
+	event, err := events.ParseWebhookPayload(webhook, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched, _, err := st.EnrichAndStoreEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enriched.CorrelationStatus != "matched" || enriched.CorrelationMethod != "unique-time-fallback" {
+		t.Fatalf("correlation = %s/%s, enriched=%+v", enriched.CorrelationStatus, enriched.CorrelationMethod, enriched)
+	}
+	if enriched.IngressEventHash != ingress.EventHash || enriched.RealClientIP != ingress.ClientIP || enriched.VPSName != ingress.VPSName {
+		t.Fatalf("ingress metadata was not attached: %+v", enriched)
+	}
+}
+
 func TestDashboardOverviewEmptyStoreReturnsZeroSummary(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

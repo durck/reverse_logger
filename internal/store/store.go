@@ -883,7 +883,22 @@ func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, s
 		}
 	}
 
-	if s.correlation.EnableUniqueTimeFallback && !(event.ProxySourceIP != "" && event.IPAddr != "") {
+	trustedProxySourceMatched := false
+	if event.ProxySourceIP != "" && event.IPAddr != "" {
+		condition := "(vps_internal_ip = ? OR vps_public_ip = ? OR forwarder_ip = ?)"
+		args := []any{event.ProxySourceIP, event.ProxySourceIP, event.ProxySourceIP}
+		if event.Transport != "" {
+			condition += " AND transport = ?"
+			args = append(args, event.Transport)
+		}
+		candidates, err := s.findIngressCandidates(windows, condition, args, 1)
+		if err != nil {
+			return nil, "", "", err
+		}
+		trustedProxySourceMatched = len(candidates) > 0
+	}
+
+	if s.correlation.EnableUniqueTimeFallback && !trustedProxySourceMatched {
 		condition := ""
 		var args []any
 		if event.Transport != "" {

@@ -111,8 +111,9 @@ ingress events. Use the page filters to hide `info` noise; the API endpoint is
 - `trusted-proxy-client-ip-fallback`: VPS address metadata was missing or
   wrong, but exactly one ingress candidate matched the trusted-proxy real
   `client_ip` inside the configured window.
-- `unique-time-fallback`: VPS address metadata was unusable and exactly one
-  unclaimed ingress candidate existed in the configured time window.
+- `unique-time-fallback`: VPS address metadata was unusable or contradicted
+  webhook proxy metadata, but exactly one unclaimed ingress candidate existed
+  in the configured time window.
 - `connected-history`: a `disconnected` webhook inherited the matched ingress
   metadata from the previous `connected` event with the same `reverse_ssh_id`.
 
