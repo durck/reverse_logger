@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Render edge-health Telegram alerts with the same compact Rich Message layout
+  as session alerts and suppress recovery noise fields.
 - Compact Telegram session alerts with a list-style Rich Message layout and
   briefly wait for late ingress correlation before sending `connected` alerts
   so real client IP is included when available.

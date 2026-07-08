@@ -357,7 +357,7 @@ func FormatEnrichedEventAlert(event events.EnrichedEvent) FormattedMessage {
 		optionalAlertField("alert_id", alertID),
 	}
 
-	return buildSessionAlertMessage(title, fields)
+	return buildCompactAlertMessage(title, fields)
 }
 
 func shouldShowAlertCorrelation(event events.EnrichedEvent) bool {
@@ -371,48 +371,30 @@ func FormatHealthAlertMessage(alert HealthAlert) string {
 
 func FormatHealthAlert(alert HealthAlert) FormattedMessage {
 	title := fmt.Sprintf("edge health %s", strings.ToUpper(valueOrDash(alert.Status)))
-	sections := []alertSection{
-		{
-			Title: "State",
-			Fields: []alertField{
-				requiredAlertField("vps", alert.VPSName),
-				requiredAlertField("previous", alert.PreviousStatus),
-				requiredAlertField("current", alert.Status),
-				optionalAlertField("last_report", alert.LastReportStatus),
-			},
-		},
-		{
-			Title: "Network",
-			Fields: []alertField{
-				optionalAlertField("public_ip", alert.VPSPublicIP),
-				optionalAlertField("internal_ip", alert.VPSInternalIP),
-			},
-		},
-		{
-			Title: "Checks",
-			Fields: []alertField{
-				requiredAlertField("failed_checks", formatStringList(alert.FailedChecks)),
-				optionalAlertField("interval_seconds", formatPositiveInt(alert.IntervalSeconds)),
-				optionalAlertField("missed_reports", formatPositiveInt(alert.MissedReports)),
-			},
-		},
-		{
-			Title: "Timeline",
-			Fields: []alertField{
-				optionalAlertField("checked_at", alert.CheckedAt),
-				optionalAlertField("last_seen_at", alert.LastSeenAt),
-				optionalAlertField("last_ok_at", alert.LastOKAt),
-				optionalAlertField("stale_after", alert.StaleAfter),
-			},
-		},
-		{
-			Title: "Tracking",
-			Fields: []alertField{
-				optionalAlertField("alert_id", strings.TrimSpace(alert.AlertID)),
-			},
-		},
+	problem := isProblemHealthStatus(alert.Status)
+	report := ""
+	if problem && strings.TrimSpace(alert.LastReportStatus) != "" {
+		report = alert.LastReportStatus
 	}
-	return buildAlertMessage(title, sections)
+	failed := ""
+	if problem {
+		failed = formatStringList(alert.FailedChecks)
+	}
+	missed := ""
+	if problem {
+		missed = formatMissedReports(alert.MissedReports, alert.IntervalSeconds)
+	}
+	fields := []alertField{
+		requiredAlertField("vps", alert.VPSName),
+		requiredAlertField("state", healthStateDisplay(alert.PreviousStatus, alert.Status)),
+		optionalAlertField("ip", compactHealthIPDisplay(alert.VPSPublicIP, alert.VPSInternalIP)),
+		optionalAlertField("report", report),
+		optionalAlertField("failed", failed),
+		optionalAlertField("missed", missed),
+		healthTimeAlertField(alert),
+		optionalAlertField("alert_id", strings.TrimSpace(alert.AlertID)),
+	}
+	return buildCompactAlertMessage(title, fields)
 }
 
 func FormatReverseSSHErrorMessage(event events.ReverseSSHErrorEvent) string {
@@ -508,15 +490,15 @@ func buildAlertMessage(title string, sections []alertSection) FormattedMessage {
 	}
 }
 
-func buildSessionAlertMessage(title string, fields []alertField) FormattedMessage {
+func buildCompactAlertMessage(title string, fields []alertField) FormattedMessage {
 	return FormattedMessage{
-		Plain:    buildSessionPlainAlert(title, fields),
-		HTML:     buildSessionHTMLAlert(title, fields),
-		RichHTML: buildSessionRichHTMLAlert(title, fields),
+		Plain:    buildCompactPlainAlert(title, fields),
+		HTML:     buildCompactHTMLAlert(title, fields),
+		RichHTML: buildCompactRichHTMLAlert(title, fields),
 	}
 }
 
-func buildSessionPlainAlert(title string, fields []alertField) string {
+func buildCompactPlainAlert(title string, fields []alertField) string {
 	lines := []string{strings.TrimSpace(title)}
 	for _, field := range visibleAlertFields(fields) {
 		lines = append(lines, fmt.Sprintf("%s: %s", field.Label, valueOrDash(cleanAlertValue(field.Value))))
@@ -524,7 +506,7 @@ func buildSessionPlainAlert(title string, fields []alertField) string {
 	return strings.Join(lines, "\n")
 }
 
-func buildSessionHTMLAlert(title string, fields []alertField) string {
+func buildCompactHTMLAlert(title string, fields []alertField) string {
 	visible := visibleAlertFields(fields)
 	var builder strings.Builder
 	builder.WriteString("<b>")
@@ -546,7 +528,7 @@ func buildSessionHTMLAlert(title string, fields []alertField) string {
 	return builder.String()
 }
 
-func buildSessionRichHTMLAlert(title string, fields []alertField) string {
+func buildCompactRichHTMLAlert(title string, fields []alertField) string {
 	visible := visibleAlertFields(fields)
 	var builder strings.Builder
 	builder.WriteString("<p><b>")
@@ -556,8 +538,10 @@ func buildSessionRichHTMLAlert(title string, fields []alertField) string {
 		return builder.String()
 	}
 
-	if visible[0].Label == "host" {
-		builder.WriteString("\n<p><b>host</b><br><code>")
+	if isPrimaryCompactField(visible[0].Label) {
+		builder.WriteString("\n<p><b>")
+		builder.WriteString(escapeTelegramHTML(visible[0].Label))
+		builder.WriteString("</b><br><code>")
 		builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(visible[0].Value))))
 		builder.WriteString("</code></p>")
 		visible = visible[1:]
@@ -576,6 +560,15 @@ func buildSessionRichHTMLAlert(title string, fields []alertField) string {
 	}
 	builder.WriteString("</ul>")
 	return builder.String()
+}
+
+func isPrimaryCompactField(label string) bool {
+	switch strings.TrimSpace(label) {
+	case "host", "vps":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildPlainAlert(title string, sections []alertSection) string {
@@ -746,6 +739,75 @@ func formatStringList(values []string) string {
 		}
 	}
 	return strings.Join(cleaned, ",")
+}
+
+func isProblemHealthStatus(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status != "" && status != "ok"
+}
+
+func healthStateDisplay(previous, current string) string {
+	previous = strings.TrimSpace(previous)
+	current = strings.TrimSpace(current)
+	switch {
+	case previous == "":
+		return current
+	case current == "":
+		return previous
+	case strings.EqualFold(previous, current):
+		return current
+	default:
+		return previous + " -> " + current
+	}
+}
+
+func compactHealthIPDisplay(publicIP, internalIP string) string {
+	publicIP = strings.TrimSpace(publicIP)
+	internalIP = strings.TrimSpace(internalIP)
+	switch {
+	case publicIP == "":
+		return internalIP
+	case internalIP == "" || publicIP == internalIP:
+		return publicIP
+	default:
+		return publicIP + " / " + internalIP
+	}
+}
+
+func formatMissedReports(missedReports, intervalSeconds int) string {
+	if missedReports <= 0 {
+		return ""
+	}
+	if intervalSeconds > 0 {
+		return fmt.Sprintf("%d x %ds", missedReports, intervalSeconds)
+	}
+	return strconv.Itoa(missedReports)
+}
+
+func healthTimeAlertField(alert HealthAlert) alertField {
+	if strings.EqualFold(strings.TrimSpace(alert.Status), "ok") {
+		if value := formatAlertTimestamp(alert.LastOKAt); value != "" {
+			return optionalAlertField("last_ok", value)
+		}
+	}
+	if value := formatAlertTimestamp(alert.LastSeenAt); value != "" {
+		return optionalAlertField("last_seen", value)
+	}
+	if value := formatAlertTimestamp(alert.CheckedAt); value != "" {
+		return optionalAlertField("checked", value)
+	}
+	return optionalAlertField("", "")
+}
+
+func formatAlertTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return formatShortTime(parsed)
+	}
+	return value
 }
 
 func compactViaDisplay(transport, vps string) string {
