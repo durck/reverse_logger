@@ -2,8 +2,9 @@
 
 ## [Unreleased]
 
-- Compact Telegram session alerts and briefly wait for late ingress correlation
-  before sending `connected` alerts so real client IP is included when available.
+- Compact Telegram session alerts with a list-style Rich Message layout and
+  briefly wait for late ingress correlation before sending `connected` alerts
+  so real client IP is included when available.
 - Render Telegram alerts as structured HTML messages, add optional Bot API 10.1
   Rich Message delivery with HTML fallback, and include enriched routing context
   in connection alerts.

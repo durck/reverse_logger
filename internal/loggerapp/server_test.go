@@ -220,7 +220,7 @@ func TestWebhookTelegramAlertWaitsForIngressCorrelation(t *testing.T) {
 
 	select {
 	case text := <-sent:
-		for _, want := range []string{"real_ip: 198.51.100.10:5555", "vps: vps-1"} {
+		for _, want := range []string{"real_ip", "198.51.100.10:5555", "via", "wss / vps-1"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("telegram text missing %q: %s", want, text)
 			}

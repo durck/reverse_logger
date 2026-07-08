@@ -344,46 +344,20 @@ func FormatEnrichedEventAlert(event events.EnrichedEvent) FormattedMessage {
 		correlation = correlationDisplay(event.CorrelationStatus, event.CorrelationMethod)
 	}
 
-	sections := []alertSection{
-		{
-			Title: "Identity",
-			Fields: []alertField{
-				requiredAlertField("host", event.HostName),
-				optionalAlertField("user", event.UserName),
-				optionalAlertField("computer", event.ComputerName),
-				requiredAlertField("id", event.ReverseSSHID),
-			},
-		},
-		{
-			Title: "Network",
-			Fields: []alertField{
-				optionalAlertField("real_ip", endpointDisplay(event.RealClientIP, event.ClientPort, "")),
-				optionalAlertField("ip", endpointDisplay(event.IPAddr, event.IPPort, event.IPRaw)),
-				optionalAlertField("transport", event.Transport),
-			},
-		},
-		{
-			Title: "Ingress",
-			Fields: []alertField{
-				optionalAlertField("vps", event.VPSName),
-				optionalAlertField("correlation", correlation),
-			},
-		},
-		{
-			Title: "Timeline",
-			Fields: []alertField{
-				requiredAlertField("received_at", formatTime(event.ReceivedAt)),
-			},
-		},
-		{
-			Title: "Tracking",
-			Fields: []alertField{
-				optionalAlertField("alert_id", alertID),
-			},
-		},
+	fields := []alertField{
+		requiredAlertField("host", event.HostName),
+		optionalAlertField("real_ip", endpointDisplay(event.RealClientIP, event.ClientPort, "")),
+		optionalAlertField("ip", endpointDisplay(event.IPAddr, event.IPPort, event.IPRaw)),
+		optionalAlertField("via", compactViaDisplay(event.Transport, event.VPSName)),
+		optionalAlertField("user", event.UserName),
+		optionalAlertField("computer", event.ComputerName),
+		requiredAlertField("id", compactMiddle(event.ReverseSSHID, 12, 6)),
+		requiredAlertField("time", formatShortTime(event.ReceivedAt)),
+		optionalAlertField("correlation", correlation),
+		optionalAlertField("alert_id", alertID),
 	}
 
-	return buildAlertMessage(title, sections)
+	return buildSessionAlertMessage(title, fields)
 }
 
 func shouldShowAlertCorrelation(event events.EnrichedEvent) bool {
@@ -532,6 +506,76 @@ func buildAlertMessage(title string, sections []alertSection) FormattedMessage {
 		HTML:     buildHTMLAlert(title, sections),
 		RichHTML: buildRichHTMLAlert(title, sections),
 	}
+}
+
+func buildSessionAlertMessage(title string, fields []alertField) FormattedMessage {
+	return FormattedMessage{
+		Plain:    buildSessionPlainAlert(title, fields),
+		HTML:     buildSessionHTMLAlert(title, fields),
+		RichHTML: buildSessionRichHTMLAlert(title, fields),
+	}
+}
+
+func buildSessionPlainAlert(title string, fields []alertField) string {
+	lines := []string{strings.TrimSpace(title)}
+	for _, field := range visibleAlertFields(fields) {
+		lines = append(lines, fmt.Sprintf("%s: %s", field.Label, valueOrDash(cleanAlertValue(field.Value))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildSessionHTMLAlert(title string, fields []alertField) string {
+	visible := visibleAlertFields(fields)
+	var builder strings.Builder
+	builder.WriteString("<b>")
+	builder.WriteString(escapeTelegramHTML(strings.TrimSpace(title)))
+	builder.WriteString("</b>")
+	if len(visible) == 0 {
+		return builder.String()
+	}
+	builder.WriteString("\n<blockquote>")
+	for i, field := range visible {
+		if i > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(escapeTelegramHTML(field.Label))
+		builder.WriteString(": ")
+		builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(field.Value))))
+	}
+	builder.WriteString("</blockquote>")
+	return builder.String()
+}
+
+func buildSessionRichHTMLAlert(title string, fields []alertField) string {
+	visible := visibleAlertFields(fields)
+	var builder strings.Builder
+	builder.WriteString("<p><b>")
+	builder.WriteString(escapeTelegramHTML(strings.TrimSpace(title)))
+	builder.WriteString("</b></p>")
+	if len(visible) == 0 {
+		return builder.String()
+	}
+
+	if visible[0].Label == "host" {
+		builder.WriteString("\n<p><b>host</b><br><code>")
+		builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(visible[0].Value))))
+		builder.WriteString("</code></p>")
+		visible = visible[1:]
+	}
+	if len(visible) == 0 {
+		return builder.String()
+	}
+
+	builder.WriteString("\n<ul>")
+	for _, field := range visible {
+		builder.WriteString("<li><b>")
+		builder.WriteString(escapeTelegramHTML(field.Label))
+		builder.WriteString("</b> <code>")
+		builder.WriteString(escapeTelegramHTML(valueOrDash(cleanAlertValue(field.Value))))
+		builder.WriteString("</code></li>")
+	}
+	builder.WriteString("</ul>")
+	return builder.String()
 }
 
 func buildPlainAlert(title string, sections []alertSection) string {
@@ -704,11 +748,31 @@ func formatStringList(values []string) string {
 	return strings.Join(cleaned, ",")
 }
 
+func compactViaDisplay(transport, vps string) string {
+	transport = strings.TrimSpace(transport)
+	vps = strings.TrimSpace(vps)
+	switch {
+	case transport == "":
+		return vps
+	case vps == "":
+		return transport
+	default:
+		return transport + " / " + vps
+	}
+}
+
 func formatTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func formatShortTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format("2006-01-02 15:04:05Z")
 }
 
 func formatPositiveInt(value int) string {
@@ -727,6 +791,17 @@ func shortAlertID(eventHash string) string {
 		return eventHash
 	}
 	return eventHash[:12]
+}
+
+func compactMiddle(value string, prefix, suffix int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if prefix <= 0 || suffix <= 0 || len(value) <= prefix+suffix+3 {
+		return value
+	}
+	return value[:prefix] + "..." + value[len(value)-suffix:]
 }
 
 func cleanAlertValue(value string) string {

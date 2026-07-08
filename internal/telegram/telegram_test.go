@@ -549,7 +549,7 @@ func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing
 		CorrelationStatus: "matched",
 		CorrelationMethod: "nearest_time",
 		Status:            "connected",
-		ReverseSSHID:      "abc",
+		ReverseSSHID:      "abcdef1234567890abcdef",
 		HostName:          "user.<host>",
 		UserName:          "user",
 		ComputerName:      "<host>",
@@ -565,7 +565,9 @@ func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing
 	})
 	for _, want := range []string{
 		"real_ip: 198.51.100.10:53000",
-		"vps: edge-1",
+		"via: wss / edge-1",
+		"id: abcdef123456...abcdef",
+		"time: 2026-07-08 12:00:00Z",
 		"alert_id: 1234567890ab",
 	} {
 		if !strings.Contains(message.Plain, want) {
@@ -575,8 +577,13 @@ func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing
 	if !strings.Contains(message.HTML, "user.&lt;host&gt;") {
 		t.Fatalf("html message did not escape host: %s", message.HTML)
 	}
-	if !strings.Contains(message.RichHTML, "<blockquote>") || strings.Contains(message.RichHTML, "<table") {
-		t.Fatalf("rich message should be compact blockquote without tables: %s", message.RichHTML)
+	for _, want := range []string{"<ul>", "<li><b>real_ip</b> <code>198.51.100.10:53000</code></li>", "<li><b>via</b> <code>wss / edge-1</code></li>"} {
+		if !strings.Contains(message.RichHTML, want) {
+			t.Fatalf("rich message missing %q: %s", want, message.RichHTML)
+		}
+	}
+	if strings.Contains(message.RichHTML, "<blockquote>") || strings.Contains(message.RichHTML, "<table") {
+		t.Fatalf("rich message should avoid quote/table containers: %s", message.RichHTML)
 	}
 }
 
