@@ -70,6 +70,53 @@
       text-align: right;
     }
 
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .nav {
+      display: flex;
+      gap: 6px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .nav-link,
+    .link-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--muted);
+      font-weight: 650;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .nav-link.active {
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+    }
+
+    .link-button {
+      border-color: var(--border);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .view-hidden {
+      display: none !important;
+    }
+
     .controls {
       display: grid;
       grid-template-columns: 120px 150px 170px 130px minmax(220px, 1fr) 110px;
@@ -190,6 +237,68 @@
       padding: 14px;
       margin-bottom: 0;
       border-bottom: 1px solid var(--line);
+    }
+
+    .health-main-summary {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .health-main-summary:empty {
+      display: none;
+    }
+
+    .health-compact .health-summary {
+      border-bottom: 0;
+    }
+
+    .health-compact .table-wrap,
+    .health-compact #health-empty {
+      display: none;
+    }
+
+    .health-okline,
+    .health-problem-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    .health-okline {
+      color: var(--ok);
+      font-weight: 700;
+    }
+
+    .health-problem-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .health-problem-row > div {
+      min-width: 0;
+    }
+
+    .health-problem-main {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+
+    .health-problem-meta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .shell > .panel:last-child {
@@ -442,6 +551,12 @@
         flex-direction: column;
       }
 
+      .topbar-actions {
+        width: 100%;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
       .statusline {
         text-align: left;
       }
@@ -462,10 +577,16 @@
   <main class="shell">
     <header class="topbar">
       <h1>reverse_ssh journal</h1>
-      <div id="statusline" class="statusline">Loading</div>
+      <div class="topbar-actions">
+        <nav class="nav" aria-label="Dashboard views">
+          <a id="nav-journal" class="nav-link" href="/dashboard/">Journal</a>
+          <a id="nav-health" class="nav-link" href="/dashboard/health">VPS health</a>
+        </nav>
+        <div id="statusline" class="statusline">Loading</div>
+      </div>
     </header>
 
-    <section class="controls" aria-label="Filters">
+    <section id="filters-section" class="controls" aria-label="Filters">
       <select id="window" class="control" aria-label="Window">
         <option value="24h">24h</option>
         <option value="7d">7d</option>
@@ -491,23 +612,26 @@
       <button id="refresh" class="button" type="button">Refresh</button>
     </section>
 
-    <section class="metrics" aria-label="Summary">
+    <section id="summary-section" class="metrics" aria-label="Summary">
       <div class="metric primary"><div class="label">Active now</div><div id="metric-active" class="value">0</div><div class="sub">live sessions</div></div>
       <div class="metric primary"><div class="label">Connected</div><div id="metric-connected" class="value">0</div><div class="sub">session opens</div></div>
       <div class="metric primary"><div class="label">Disconnected</div><div id="metric-disconnected" class="value">0</div><div class="sub">session closes</div></div>
       <div class="metric primary"><div class="label">Unmatched</div><div id="metric-unmatched" class="value">0</div><div class="sub">needs review</div></div>
     </section>
 
-    <section class="metric-strip" aria-label="Secondary summary">
+    <section id="secondary-summary-section" class="metric-strip" aria-label="Secondary summary">
       <div class="metric-chip"><span>Total</span><strong id="metric-total">0</strong><span id="metric-window">24h</span></div>
       <div class="metric-chip"><span>Matched</span><strong id="metric-matched">0</strong></div>
       <div class="metric-chip"><span>Ambiguous</span><strong id="metric-ambiguous">0</strong></div>
     </section>
 
-    <section class="panel" aria-label="VPS health">
+    <section id="health-panel" class="panel" aria-label="VPS health">
       <div class="panel-head">
         <div class="panel-title">VPS health</div>
-        <div id="health-updated" class="panel-subtitle"></div>
+        <div class="topbar-actions">
+          <a id="health-detail-link" class="link-button" href="/dashboard/health">Details</a>
+          <div id="health-updated" class="panel-subtitle"></div>
+        </div>
       </div>
       <section class="metric-strip health-summary" aria-label="VPS health summary">
         <div class="metric-chip"><span>Total</span><strong id="health-total">0</strong></div>
@@ -516,6 +640,7 @@
         <div class="metric-chip"><span>Down</span><strong id="health-down">0</strong></div>
         <div class="metric-chip"><span>Unknown</span><strong id="health-unknown">0</strong></div>
       </section>
+      <div id="health-main-summary" class="health-main-summary"></div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -535,7 +660,7 @@
       </div>
     </section>
 
-    <section class="grid">
+    <section id="analytics-section" class="grid">
       <section class="panel" aria-label="Timeline">
         <div class="panel-head">
           <div class="panel-title">Session activity timeline</div>
@@ -589,7 +714,7 @@
       </div>
     </section>
 
-    <section class="panel" aria-label="Recent sessions">
+    <section id="recent-panel" class="panel" aria-label="Recent sessions">
       <div class="panel-head">
         <div class="panel-title">Recent sessions</div>
         <div id="event-count" class="panel-subtitle"></div>
@@ -624,7 +749,24 @@
       search: el("search"),
       refresh: el("refresh")
     };
+    const dashboardView = window.location.pathname.replace(/\/+$/, "") === "/dashboard/health" ? "health" : "journal";
+    const isHealthPage = dashboardView === "health";
     let searchTimer = 0;
+
+    function setupView() {
+      el("nav-journal").classList.toggle("active", !isHealthPage);
+      el("nav-health").classList.toggle("active", isHealthPage);
+      el("filters-section").classList.toggle("view-hidden", isHealthPage);
+      el("summary-section").classList.toggle("view-hidden", isHealthPage);
+      el("secondary-summary-section").classList.toggle("view-hidden", isHealthPage);
+      el("analytics-section").classList.toggle("view-hidden", isHealthPage);
+      el("active-panel").classList.toggle("view-hidden", isHealthPage);
+      el("recent-panel").classList.toggle("view-hidden", isHealthPage);
+      el("health-panel").classList.toggle("health-compact", !isHealthPage);
+      el("health-panel").classList.toggle("health-detail", isHealthPage);
+      el("health-detail-link").textContent = isHealthPage ? "Back to journal" : "Details";
+      el("health-detail-link").href = isHealthPage ? "/dashboard/" : "/dashboard/health";
+    }
 
     function text(id, value) {
       el(id).textContent = value == null || value === "" ? "-" : String(value);
@@ -659,6 +801,12 @@
       controls.refresh.disabled = true;
       text("statusline", "Loading");
       try {
+        if (isHealthPage) {
+          const healthPayload = await fetchJSON(`/dashboard/api/edge-health`);
+          renderHealth(healthPayload);
+          text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
+          return;
+        }
         const [overview, eventsPayload, healthPayload] = await Promise.all([
           fetchJSON(`/dashboard/api/overview?${params(false)}`),
           fetchJSON(`/dashboard/api/events?${params(true)}`),
@@ -833,6 +981,9 @@
       text("health-updated", payload.generated_at ? `Updated ${formatTime(payload.generated_at)}` : "");
 
       const nodes = payload.nodes || [];
+      const problemNodes = nodes.filter((node) => (node.status || "unknown") !== "ok");
+      renderHealthMainSummary(summary, nodes, problemNodes);
+
       const targetBody = el("health-body");
       targetBody.replaceChildren();
       el("health-empty").hidden = nodes.length !== 0;
@@ -849,6 +1000,61 @@
         );
         targetBody.appendChild(row);
       }
+    }
+
+    function renderHealthMainSummary(summary, nodes, problemNodes) {
+      const target = el("health-main-summary");
+      target.replaceChildren();
+      if (isHealthPage) return;
+
+      if (!nodes.length) {
+        const empty = document.createElement("div");
+        empty.className = "health-okline";
+        empty.textContent = "No VPS health reports yet";
+        target.appendChild(empty);
+        return;
+      }
+
+      if (!problemNodes.length) {
+        const okLine = document.createElement("div");
+        okLine.className = "health-okline";
+        const main = document.createElement("div");
+        main.textContent = `All ${summary.total || nodes.length} VPS OK`;
+        const updated = document.createElement("div");
+        updated.className = "health-problem-meta";
+        updated.textContent = "No degraded, down, or unknown hosts";
+        okLine.append(main, updated);
+        target.appendChild(okLine);
+        return;
+      }
+
+      const list = document.createElement("div");
+      list.className = "health-problem-list";
+      for (const node of problemNodes.slice(0, 6)) {
+        const row = document.createElement("div");
+        row.className = "health-problem-row";
+        const copy = document.createElement("div");
+        copy.className = "health-problem-main";
+        copy.textContent = node.vps_name || "-";
+        const meta = document.createElement("div");
+        meta.className = "health-problem-meta";
+        const failed = (node.failed_checks || []).join(", ") || "status not OK";
+        meta.textContent = `${failed} | last seen ${formatTime(node.last_seen_at)}`;
+        const pill = document.createElement("span");
+        pill.className = `pill ${node.status || "unknown"}`;
+        pill.textContent = node.status || "unknown";
+        const left = document.createElement("div");
+        left.append(copy, meta);
+        row.append(left, pill);
+        list.appendChild(row);
+      }
+      if (problemNodes.length > 6) {
+        const more = document.createElement("div");
+        more.className = "health-problem-meta";
+        more.textContent = `${problemNodes.length - 6} more problem hosts on the details page`;
+        list.appendChild(more);
+      }
+      target.appendChild(list);
     }
 
     function renderSessionTable(events, bodyID, emptyID, countID) {
@@ -1186,6 +1392,7 @@
       searchTimer = setTimeout(loadAll, 250);
     });
 
+    setupView();
     loadAll();
     setInterval(loadAll, 30000);
   </script>

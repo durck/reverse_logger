@@ -32,6 +32,13 @@ type CorrelationConfig struct {
 	EnableUniqueTimeFallback bool
 }
 
+const (
+	httpsWebhookMatchBefore     = 5 * time.Minute
+	httpsWebhookMatchAfter      = time.Minute
+	httpsIngressReconcileBefore = time.Minute
+	httpsIngressReconcileAfter  = 5 * time.Minute
+)
+
 func DefaultCorrelationConfig() CorrelationConfig {
 	return CorrelationConfig{
 		WebhookMatchBefore:       60 * time.Second,
@@ -790,7 +797,13 @@ func (s *Store) eventMatchWindows(event events.Event) []timeWindow {
 	if !event.SourceTS.IsZero() {
 		times = append(times, event.SourceTS)
 	}
-	return buildTimeWindows(times, s.correlation.WebhookMatchBefore, s.correlation.WebhookMatchAfter)
+	before := s.correlation.WebhookMatchBefore
+	after := s.correlation.WebhookMatchAfter
+	if event.Transport == "https" {
+		before = maxDuration(before, httpsWebhookMatchBefore)
+		after = maxDuration(after, httpsWebhookMatchAfter)
+	}
+	return buildTimeWindows(times, before, after)
 }
 
 func (s *Store) ingressReconcileWindows(ingress events.IngressEvent) []timeWindow {
@@ -798,7 +811,20 @@ func (s *Store) ingressReconcileWindows(ingress events.IngressEvent) []timeWindo
 	if !ingress.ForwardedAt.IsZero() {
 		times = append(times, ingress.ForwardedAt)
 	}
-	return buildTimeWindows(times, s.correlation.IngressReconcileBefore, s.correlation.IngressReconcileAfter)
+	before := s.correlation.IngressReconcileBefore
+	after := s.correlation.IngressReconcileAfter
+	if ingress.Transport == "https" {
+		before = maxDuration(before, httpsIngressReconcileBefore)
+		after = maxDuration(after, httpsIngressReconcileAfter)
+	}
+	return buildTimeWindows(times, before, after)
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func buildTimeWindows(times []time.Time, before, after time.Duration) []timeWindow {

@@ -526,6 +526,49 @@ func TestWebhookCreatesMatchedEnrichedEvent(t *testing.T) {
 	}
 }
 
+func TestWebhookMatchesDelayedHTTPSIngressEvent(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"https","vps_name":"vps-1","vps_public_ip":"203.0.113.20","vps_internal_ip":"192.0.2.2","client_ip":"198.51.100.10","client_port":5555,"uri":"/push","method":"HEAD","polling_key_sha1":"a9993e364706816aba3e25717850c26c9cd0d89d","nginx_received_at":"2026-06-09T12:00:00Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"192.0.2.2:4444","HostName":"u.c","Timestamp":"2026-06-09T12:03:00Z","Transport":"https"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("webhook response did not report matched correlation: %s", webhookRec.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "enriched_events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"real_client_ip":"198.51.100.10"`, `"transport":"https"`, `"correlation_status":"matched"`} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("enriched jsonl missing %s: %s", want, string(content))
+		}
+	}
+}
+
 func TestWebhookCreatesUnmatchedEnrichedEvent(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)
@@ -1039,6 +1082,31 @@ func TestDashboardAcceptsBasicAuthForPage(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "reverse_ssh journal") {
 		t.Fatalf("dashboard page body missing title")
+	}
+}
+
+func TestDashboardAcceptsBasicAuthForHealthPage(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/health", nil)
+	req.SetBasicAuth("operator", "dash-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "VPS health") {
+		t.Fatalf("dashboard health page body missing health section")
 	}
 }
 

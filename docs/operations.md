@@ -203,7 +203,9 @@ Large `link` download stops early (`curl: (18)`, partial file size):
    automatically.
 4. Keep `RSSH_WS_PATH` / `RSSH_PUSH_PATH` aligned across nginx, forwarder,
    main `INGRESS_*`, and `REVERSE_SSH_*`.
-5. If clocks or forwarding are delayed, increase:
+5. HTTPS polling has a wider built-in match window because the `HEAD` ingress
+   probe can arrive minutes before the reverse_ssh webhook. If clocks or
+   forwarding are delayed beyond that, increase:
 
 ```text
 CORRELATION_WEBHOOK_MATCH_BEFORE=5m

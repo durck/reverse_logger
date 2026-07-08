@@ -33,7 +33,7 @@ func (s *Server) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDashboardAuth(w, r) {
 		return
 	}
-	if r.URL.Path != "/dashboard/" && r.URL.Path != "/dashboard/index.html" {
+	if r.URL.Path != "/dashboard/" && r.URL.Path != "/dashboard/index.html" && r.URL.Path != "/dashboard/health" && r.URL.Path != "/dashboard/health/" {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
