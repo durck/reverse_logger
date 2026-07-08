@@ -845,22 +845,34 @@
           text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
           return;
         }
-        const [overview, eventsPayload, systemEventsPayload, healthPayload] = await Promise.all([
+        const [overviewResult, eventsResult, systemEventsResult, healthResult] = await Promise.allSettled([
           fetchJSON(`/dashboard/api/overview?${params(false)}`),
           fetchJSON(`/dashboard/api/events?${params(true)}`),
           fetchJSON(`/dashboard/api/system-events?${systemParams()}`),
           fetchJSON(`/dashboard/api/edge-health`)
         ]);
-        renderOverview(overview);
-        renderEvents(eventsPayload.events || []);
-        renderSystemEvents(systemEventsPayload.events || []);
-        renderHealth(healthPayload);
-        text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
+        const failures = [];
+        const overview = settledPayload(overviewResult, "overview", failures);
+        const eventsPayload = settledPayload(eventsResult, "events", failures);
+        const systemEventsPayload = settledPayload(systemEventsResult, "connection events", failures);
+        const healthPayload = settledPayload(healthResult, "health", failures);
+        if (overview) renderOverview(overview);
+        if (eventsPayload) renderEvents(eventsPayload.events || []);
+        if (systemEventsPayload) renderSystemEvents(systemEventsPayload.events || []);
+        if (healthPayload) renderHealth(healthPayload);
+        const updated = `Updated ${new Date().toLocaleTimeString()}`;
+        text("statusline", failures.length ? `${updated}; failed: ${failures.join(", ")}` : updated);
       } catch (error) {
         text("statusline", error.message);
       } finally {
         controls.refresh.disabled = false;
       }
+    }
+
+    function settledPayload(result, label, failures) {
+      if (result.status === "fulfilled") return result.value;
+      failures.push(`${label} (${result.reason?.message || result.reason || "error"})`);
+      return null;
     }
 
     function renderOverview(data) {
