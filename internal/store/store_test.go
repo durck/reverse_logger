@@ -453,6 +453,18 @@ func TestDashboardSystemEventsReturnsIngressAndReverseSSHErrors(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Kind != "reverse_ssh_error" {
 		t.Fatalf("filtered system events = %+v", filtered)
 	}
+
+	withoutInfo, err := st.DashboardSystemEvents(context.Background(), DashboardSystemEventQuery{
+		Window:   24 * time.Hour,
+		Severity: "not_info",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutInfo) != 1 || withoutInfo[0].Kind != "reverse_ssh_error" {
+		t.Fatalf("non-info system events = %+v", withoutInfo)
+	}
 }
 
 func seedDashboardEnriched(t *testing.T, st *Store, suffix, status, correlationStatus, transport, vpsName, hostName, realClientIP, vpsPublicIP, ingressHost string, receivedAt time.Time) {

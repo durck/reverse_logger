@@ -581,10 +581,11 @@
 <body>
   <main class="shell">
     <header class="topbar">
-      <h1>reverse_ssh journal</h1>
+      <h1 id="app-title">reverse_ssh journal</h1>
       <div class="topbar-actions">
         <nav class="nav" aria-label="Dashboard views">
           <a id="nav-journal" class="nav-link" href="/dashboard/">Journal</a>
+          <a id="nav-connections" class="nav-link" href="/dashboard/connections">Connection events</a>
           <a id="nav-health" class="nav-link" href="/dashboard/health">VPS health</a>
         </nav>
         <div id="statusline" class="statusline">Loading</div>
@@ -615,6 +616,28 @@
       </select>
       <input id="search" class="control" type="search" placeholder="Search host, IP, ID, VPS" aria-label="Search">
       <button id="refresh" class="button" type="button">Refresh</button>
+    </section>
+
+    <section id="connection-filters-section" class="controls view-hidden" aria-label="Connection event filters">
+      <select id="connection-window" class="control" aria-label="Window">
+        <option value="24h">24h</option>
+        <option value="7d">7d</option>
+        <option value="30d">30d</option>
+      </select>
+      <select id="connection-kind" class="control" aria-label="Connection event type">
+        <option value="">All types</option>
+        <option value="reverse_ssh_error">reverse_ssh errors</option>
+        <option value="ingress">Ingress</option>
+      </select>
+      <select id="connection-severity" class="control" aria-label="Severity">
+        <option value="not_info">Warnings/errors</option>
+        <option value="">All severity</option>
+        <option value="error">Error</option>
+        <option value="warning">Warning</option>
+        <option value="info">Info</option>
+      </select>
+      <input id="connection-search" class="control" type="search" placeholder="Search reason, endpoint, source" aria-label="Search connection events">
+      <button id="connection-refresh" class="button" type="button">Refresh</button>
     </section>
 
     <section id="summary-section" class="metrics" aria-label="Summary">
@@ -778,21 +801,34 @@
       search: el("search"),
       refresh: el("refresh")
     };
-    const dashboardView = window.location.pathname.replace(/\/+$/, "") === "/dashboard/health" ? "health" : "journal";
+    const connectionControls = {
+      window: el("connection-window"),
+      kind: el("connection-kind"),
+      severity: el("connection-severity"),
+      search: el("connection-search"),
+      refresh: el("connection-refresh")
+    };
+    const normalizedPath = window.location.pathname.replace(/\/+$/, "");
+    const dashboardView = normalizedPath === "/dashboard/health" ? "health" : normalizedPath === "/dashboard/connections" ? "connections" : "journal";
     const isHealthPage = dashboardView === "health";
+    const isConnectionsPage = dashboardView === "connections";
     let searchTimer = 0;
 
     function setupView() {
-      el("nav-journal").classList.toggle("active", !isHealthPage);
+      el("app-title").textContent = isConnectionsPage ? "Connection events" : isHealthPage ? "VPS health" : "reverse_ssh journal";
+      el("nav-journal").classList.toggle("active", dashboardView === "journal");
+      el("nav-connections").classList.toggle("active", isConnectionsPage);
       el("nav-health").classList.toggle("active", isHealthPage);
-      el("filters-section").classList.toggle("view-hidden", isHealthPage);
-      el("summary-section").classList.toggle("view-hidden", isHealthPage);
-      el("secondary-summary-section").classList.toggle("view-hidden", isHealthPage);
-      el("analytics-section").classList.toggle("view-hidden", isHealthPage);
-      el("system-events-panel").classList.toggle("view-hidden", isHealthPage);
-      el("active-panel").classList.toggle("view-hidden", isHealthPage);
-      el("recent-panel").classList.toggle("view-hidden", isHealthPage);
-      el("health-panel").classList.toggle("health-compact", !isHealthPage);
+      el("filters-section").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("connection-filters-section").classList.toggle("view-hidden", !isConnectionsPage);
+      el("summary-section").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("secondary-summary-section").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("analytics-section").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("system-events-panel").classList.toggle("view-hidden", !isConnectionsPage);
+      el("active-panel").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("recent-panel").classList.toggle("view-hidden", dashboardView !== "journal");
+      el("health-panel").classList.toggle("view-hidden", isConnectionsPage);
+      el("health-panel").classList.toggle("health-compact", dashboardView === "journal");
       el("health-panel").classList.toggle("health-detail", isHealthPage);
       el("health-detail-link").textContent = isHealthPage ? "Back to journal" : "Details";
       el("health-detail-link").href = isHealthPage ? "/dashboard/" : "/dashboard/health";
@@ -817,10 +853,16 @@
 
     function systemParams() {
       const p = new URLSearchParams();
-      p.set("window", controls.window.value);
-      if (controls.search.value.trim()) p.set("q", controls.search.value.trim());
+      p.set("window", connectionControls.window.value);
+      if (connectionControls.kind.value) p.set("kind", connectionControls.kind.value);
+      if (connectionControls.severity.value) p.set("severity", connectionControls.severity.value);
+      if (connectionControls.search.value.trim()) p.set("q", connectionControls.search.value.trim());
       p.set("limit", "100");
       return p;
+    }
+
+    function activeRefreshButton() {
+      return isConnectionsPage ? connectionControls.refresh : controls.refresh;
     }
 
     async function fetchJSON(url) {
@@ -836,7 +878,8 @@
     }
 
     async function loadAll() {
-      controls.refresh.disabled = true;
+      const refreshButton = activeRefreshButton();
+      refreshButton.disabled = true;
       text("statusline", "Loading");
       try {
         if (isHealthPage) {
@@ -845,27 +888,30 @@
           text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
           return;
         }
-        const [overviewResult, eventsResult, systemEventsResult, healthResult] = await Promise.allSettled([
+        if (isConnectionsPage) {
+          const systemEventsPayload = await fetchJSON(`/dashboard/api/system-events?${systemParams()}`);
+          renderSystemEvents(systemEventsPayload.events || []);
+          text("statusline", `Updated ${new Date().toLocaleTimeString()}`);
+          return;
+        }
+        const [overviewResult, eventsResult, healthResult] = await Promise.allSettled([
           fetchJSON(`/dashboard/api/overview?${params(false)}`),
           fetchJSON(`/dashboard/api/events?${params(true)}`),
-          fetchJSON(`/dashboard/api/system-events?${systemParams()}`),
           fetchJSON(`/dashboard/api/edge-health`)
         ]);
         const failures = [];
         const overview = settledPayload(overviewResult, "overview", failures);
         const eventsPayload = settledPayload(eventsResult, "events", failures);
-        const systemEventsPayload = settledPayload(systemEventsResult, "connection events", failures);
         const healthPayload = settledPayload(healthResult, "health", failures);
         if (overview) renderOverview(overview);
         if (eventsPayload) renderEvents(eventsPayload.events || []);
-        if (systemEventsPayload) renderSystemEvents(systemEventsPayload.events || []);
         if (healthPayload) renderHealth(healthPayload);
         const updated = `Updated ${new Date().toLocaleTimeString()}`;
         text("statusline", failures.length ? `${updated}; failed: ${failures.join(", ")}` : updated);
       } catch (error) {
         text("statusline", error.message);
       } finally {
-        controls.refresh.disabled = false;
+        refreshButton.disabled = false;
       }
     }
 
@@ -1479,6 +1525,14 @@
     controls.correlation.addEventListener("change", loadAll);
     controls.transport.addEventListener("change", loadAll);
     controls.search.addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(loadAll, 250);
+    });
+    connectionControls.refresh.addEventListener("click", loadAll);
+    connectionControls.window.addEventListener("change", loadAll);
+    connectionControls.kind.addEventListener("change", loadAll);
+    connectionControls.severity.addEventListener("change", loadAll);
+    connectionControls.search.addEventListener("input", () => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(loadAll, 250);
     });

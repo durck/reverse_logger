@@ -1179,6 +1179,31 @@ func TestDashboardAcceptsBasicAuthForHealthPage(t *testing.T) {
 	}
 }
 
+func TestDashboardAcceptsBasicAuthForConnectionsPage(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServerWithDashboardToken("secret", "edge-secret", st, tg, "/ws", "/push", "dash-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/connections", nil)
+	req.SetBasicAuth("operator", "dash-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Connection events") {
+		t.Fatalf("dashboard connections page body missing connection events section")
+	}
+}
+
 func TestDashboardAcceptsBearerAuthForAPI(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

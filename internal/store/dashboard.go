@@ -250,7 +250,10 @@ func (s *Store) DashboardSystemEvents(ctx context.Context, query DashboardSystem
 		conditions = append(conditions, "kind = ?")
 		args = append(args, kind)
 	}
-	if severity := strings.ToLower(strings.TrimSpace(query.Severity)); severity != "" {
+	if severity := strings.ToLower(strings.TrimSpace(query.Severity)); severity == "not_info" || severity == "non_info" {
+		conditions = append(conditions, "severity <> ?")
+		args = append(args, "info")
+	} else if severity != "" {
 		conditions = append(conditions, "severity = ?")
 		args = append(args, severity)
 	}

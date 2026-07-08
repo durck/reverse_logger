@@ -98,9 +98,9 @@ sqlite3 /opt/reverse-logger/data/logger/events.db \
   'select severity, reason, remote_addr, message, observed_at from reverse_ssh_errors order by id desc limit 20;'
 ```
 
-The dashboard `/dashboard/` page shows these rows in the `Connection events`
-panel together with raw ingress events. The API endpoint is
-`/dashboard/api/system-events?window=24h`.
+The dashboard `/dashboard/connections` page shows these rows together with raw
+ingress events. Use the page filters to hide `info` noise; the API endpoint is
+`/dashboard/api/system-events?window=24h&severity=not_info`.
 
 `correlation_method` explains how an ingress event was selected:
 

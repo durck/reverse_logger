@@ -76,5 +76,5 @@ http://rssh-logger:8080/reverse-ssh-errors/<EDGE_FORWARD_TOKEN>
 ```
 
 The central logger stores these in `reverse_ssh_errors`, appends
-`reverse_ssh_errors.jsonl`, shows them in the dashboard `Connection events`
-panel, and sends Telegram alerts when Telegram is enabled.
+`reverse_ssh_errors.jsonl`, shows them on `/dashboard/connections`, and sends
+Telegram alerts when Telegram is enabled.

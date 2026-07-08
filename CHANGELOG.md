@@ -9,6 +9,8 @@
   `auth_failed` before generic handshake failures.
 - Treat reverse_ssh multiplexing `failed to read header` probe timeouts as
   dashboard-only malformed probes to avoid Telegram alert noise.
+- Move dashboard connection events to a dedicated `/dashboard/connections`
+  page with type, severity, and search filters.
 - Keep the dashboard usable when one journal API panel fails by rendering
   successful panels and surfacing the failed endpoint in the status line.
 - Add VPS edge health push-agent monitoring with central health state,

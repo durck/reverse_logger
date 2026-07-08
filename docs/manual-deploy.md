@@ -268,6 +268,12 @@ published logger endpoint:
 http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/dashboard/
 ```
 
+Connection events are on a separate page:
+
+```text
+http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/dashboard/connections
+```
+
 Use HTTP Basic Auth in the browser: any username, and `DASHBOARD_TOKEN` as the
 password. For localhost-only access, keep `LOGGER_BIND_IP=127.0.0.1` and open
 an SSH tunnel from your workstation:
