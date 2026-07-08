@@ -279,12 +279,22 @@
         - rssh_domain is defined
         - rssh_domain | length > 0
         - nginx_edge_acme_email is not defined or nginx_edge_acme_email | length == 0
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Derive ACME lineage paths
       ansible.builtin.set_fact:
         nginx_edge_acme_expected_cert_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/fullchain.pem"
         nginx_edge_acme_expected_key_path: "/etc/letsencrypt/live/{{ nginx_edge_acme_cert_name }}/privkey.pem"
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Validate required variables
       ansible.builtin.assert:
@@ -344,6 +354,11 @@
           nginx_edge_acme_cert_name. Certbot manages
           /etc/letsencrypt/live/<cert-name>/fullchain.pem and privkey.pem.
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Validate HTTP-01 ACME variables
       ansible.builtin.assert:
@@ -354,6 +369,11 @@
       when:
         - nginx_edge_acme_enabled | bool
         - nginx_edge_acme_challenge == 'http-01'
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Show ACME Timeweb DNS-01 fallback status
       ansible.builtin.debug:
@@ -362,6 +382,11 @@
           - "http01_fallback_to_dns_timeweb={{ nginx_edge_acme_http01_fallback_to_dns_timeweb | bool }}"
           - "timeweb_token_available={{ timewebcloud_auth_token is defined and (timewebcloud_auth_token | default('', true) | length > 20) and timewebcloud_auth_token != 'replace_with_TIMEWEBCLOUD_AUTH_TOKEN' }}"
       when: nginx_edge_acme_enabled | bool
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Validate Timeweb DNS-01 ACME variables
       ansible.builtin.assert:
@@ -382,6 +407,11 @@
             and timewebcloud_auth_token is defined
           )
       no_log: true
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Derive whether certbot-dns-multi is required
       ansible.builtin.set_fact:
@@ -397,7 +427,11 @@
             )
           }}
       when: nginx_edge_acme_enabled | bool
-      tags: always
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Derive Certbot pip package list
       ansible.builtin.set_fact:
@@ -407,7 +441,11 @@
             + ((nginx_edge_dns_multi_required | default(false) | bool) | ternary(['certbot-dns-multi'], []))
           }}
       when: nginx_edge_acme_enabled | bool
-      tags: always
+      tags:
+        - acme
+        - certbot
+        - snap
+        - pip
 
     - name: Check existing Certbot executable
       ansible.builtin.command:

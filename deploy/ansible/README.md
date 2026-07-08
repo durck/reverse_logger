@@ -594,6 +594,9 @@ node registration:
 ansible-playbook -i inventory.yml vps-edge.yml --tags edge_health
 ```
 
+This health-only path does not run ACME or Timeweb DNS tasks, so it does not
+require the vault password used for certificate automation.
+
 From repo root:
 
 ```sh
