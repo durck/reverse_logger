@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -58,7 +59,7 @@ func loadConfig() (config, error) {
 }
 
 func run(ctx context.Context, cfg config) error {
-	cmd := exec.CommandContext(ctx, "sh", "-c", cfg.Command)
+	cmd := shellCommand(ctx, cfg.Command)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -71,10 +72,25 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 
-	go logPipe(stderr)
-	scanErr := scanLines(ctx, cfg, stdout)
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- scanLines(ctx, cfg, stdout)
+	}()
+	go func() {
+		errCh <- scanLines(ctx, cfg, stderr)
+	}()
+
 	waitErr := cmd.Wait()
-	return errors.Join(scanErr, waitErr)
+	stdoutErr := <-errCh
+	stderrErr := <-errCh
+	return errors.Join(stdoutErr, stderrErr, waitErr)
+}
+
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", command)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", command)
 }
 
 func scanLines(ctx context.Context, cfg config, reader io.Reader) error {
@@ -120,13 +136,6 @@ func postEvent(ctx context.Context, client *http.Client, endpoint string, event 
 
 func forwardEndpoint(baseURL, token string) string {
 	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/" + url.PathEscape(strings.TrimSpace(token))
-}
-
-func logPipe(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		log.Printf("journal command: %s", scanner.Text())
-	}
 }
 
 func envOrDefault(name, fallback string) string {
