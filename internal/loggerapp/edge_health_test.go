@@ -103,6 +103,23 @@ func TestEdgeHealthExpectedEndpointRegistersNode(t *testing.T) {
 	}
 }
 
+func TestEdgeHealthExpectedEndpointAcceptsBearerTokenWithoutTrailingSlash(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	server := newHealthTestServer(t, st, telegram.Config{})
+
+	req := httptest.NewRequest(http.MethodPut, "/edge-health/expected", strings.NewReader(`{"nodes":[{"vps_name":"vps-1"}]}`))
+	req.Header.Set("Authorization", "Bearer health-secret")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestEdgeHealthTelegramAlertDoesNotDuplicateSameState(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

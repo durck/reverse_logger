@@ -553,7 +553,7 @@ failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 | `backend_reverse_ssh_url` | `https://<main_internal_ip>:3232` |
 | `edge_forward_url` | `http://<main_internal_ip>:8080/ingress-events`; main compose must publish this with `LOGGER_BIND_IP=<main_internal_ip>` |
 | `edge_health_url` | `http://<main_internal_ip>:8080/edge-health` |
-| `edge_health_expected_url` | `http://<main_internal_ip>:8080/edge-health/expected` |
+| `edge_health_expected_url` | `http://<main_internal_ip>:8080/edge-health/expected/` |
 | `vps_name` | inventory hostname |
 | `vps_public_ip` | `ansible_host` |
 | `vps_internal_ip` | optional `/edge/source-ip` response from main logger |
@@ -585,6 +585,13 @@ With YAML inventory:
 
 ```sh
 ansible-playbook -i inventory.yml vps-edge.yml
+```
+
+Update only the VPS health agent, its environment, systemd unit, and expected
+node registration:
+
+```sh
+ansible-playbook -i inventory.yml vps-edge.yml --tags edge_health
 ```
 
 From repo root:

@@ -122,27 +122,35 @@
         - main_internal_ip is defined
         - main_internal_ip | length > 0
         - edge_forward_url is not defined or edge_forward_url | length == 0
+      tags:
+        - edge_health
 
     - name: Derive edge health URLs from main_internal_ip
       ansible.builtin.set_fact:
         edge_health_url: "{{ edge_health_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/edge-health', true) }}"
-        edge_health_expected_url: "{{ edge_health_expected_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/edge-health/expected', true) }}"
+        edge_health_expected_url: "{{ edge_health_expected_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/edge-health/expected/', true) }}"
         edge_health_logger_health_url: "{{ edge_health_logger_health_url | default('http://' ~ main_internal_ip ~ ':' ~ main_logger_port ~ '/healthz', true) }}"
         edge_health_reverse_ssh_addr: "{{ edge_health_reverse_ssh_addr | default(main_internal_ip ~ ':' ~ main_reverse_ssh_port, true) }}"
       when:
         - edge_health_enabled | bool
         - main_internal_ip is defined
         - main_internal_ip | length > 0
+      tags:
+        - edge_health
 
     - name: Derive vps_name from inventory hostname
       ansible.builtin.set_fact:
         vps_name: "{{ inventory_hostname }}"
       when: vps_name is not defined or vps_name | length == 0
+      tags:
+        - edge_health
 
     - name: Derive vps_public_ip from inventory or default IPv4
       ansible.builtin.set_fact:
         vps_public_ip: "{{ hostvars[inventory_hostname].ansible_host | default(ansible_facts.get('default_ipv4', {}).get('address', ''), true) }}"
       when: vps_public_ip is not defined or vps_public_ip | length == 0
+      tags:
+        - edge_health
 
     - name: Build edge health service check list
       ansible.builtin.set_fact:
@@ -157,6 +165,29 @@
             | list
           }}
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
+
+    - name: Validate edge-health deployment configuration
+      ansible.builtin.assert:
+        that:
+          - edge_health_token is defined
+          - edge_health_token | length > 20
+          - edge_health_token != 'replace_with_EDGE_HEALTH_TOKEN'
+          - edge_health_url is defined
+          - edge_health_url | length > 0
+          - edge_health_expected_url is defined
+          - edge_health_expected_url | length > 0
+          - edge_health_reverse_ssh_addr is defined
+          - edge_health_reverse_ssh_addr | length > 0
+          - edge_health_logger_health_url is defined
+          - edge_health_logger_health_url | length > 0
+          - vps_name is defined
+          - vps_public_ip is defined
+        quiet: true
+      when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Extract backend and logger URL authorities
       ansible.builtin.set_fact:
@@ -181,6 +212,8 @@
       when:
         - vps_internal_ip_probe_enabled | bool
         - vps_internal_ip is not defined or vps_internal_ip | length == 0
+      tags:
+        - edge_health
 
     - name: Detect main-observed VPS source IP
       block:
@@ -211,6 +244,8 @@
         - vps_internal_ip_probe_enabled | bool
         - edge_source_ip_probe_url is defined
         - vps_internal_ip is not defined or vps_internal_ip | length == 0
+      tags:
+        - edge_health
 
     - name: Record main-observed VPS source IP
       ansible.builtin.set_fact:
@@ -221,6 +256,8 @@
         - vps_source_ip_probe.json is defined
         - vps_source_ip_probe.json.source_ip | default('', true) | length > 0
         - vps_internal_ip is not defined or vps_internal_ip | length == 0
+      tags:
+        - edge_health
 
     - name: Stop when main-observed VPS source IP probe is required
       ansible.builtin.fail:
@@ -232,6 +269,8 @@
       when:
         - vps_internal_ip_probe_required | bool
         - vps_internal_ip | default('', true) | length == 0
+      tags:
+        - edge_health
 
     - name: Derive ACME email from edge domain
       ansible.builtin.set_fact:
@@ -1016,6 +1055,8 @@
         owner: root
         group: root
         mode: "0755"
+      tags:
+        - edge_health
 
     - name: Clone reverse_logger repository
       ansible.builtin.git:
@@ -1027,6 +1068,8 @@
       until: reverse_logger_repo_checkout is succeeded
       retries: "{{ nginx_edge_network_retries | int }}"
       delay: "{{ nginx_edge_network_delay | int }}"
+      tags:
+        - edge_health
 
     - name: Check Go compiler version
       ansible.builtin.command:
@@ -1035,6 +1078,8 @@
           - version
       register: reverse_logger_go_version_cmd
       changed_when: false
+      tags:
+        - edge_health
 
     - name: Validate Go compiler version output
       ansible.builtin.assert:
@@ -1042,10 +1087,14 @@
           - reverse_logger_go_version_cmd.stdout is search('^go version go[0-9]+\\.[0-9]+')
         fail_msg: "Unexpected go version output: {{ reverse_logger_go_version_cmd.stdout }}"
         quiet: true
+      tags:
+        - edge_health
 
     - name: Derive Go compiler version
       ansible.builtin.set_fact:
         reverse_logger_go_detected_version: "{{ reverse_logger_go_version_cmd.stdout | regex_replace('^go version go([0-9]+\\.[0-9]+(?:\\.[0-9]+)?).*$', '\\1') }}"
+      tags:
+        - edge_health
 
     - name: Validate Go compiler minimum version
       ansible.builtin.assert:
@@ -1057,6 +1106,8 @@
           the VPS before building reverse_logger, or lower
           reverse_logger_go_min_version only if the source still supports it.
         quiet: true
+      tags:
+        - edge_health
 
     - name: Check Go module proxy candidates
       ansible.builtin.uri:
@@ -1070,6 +1121,8 @@
       changed_when: false
       failed_when: false
       when: item is match('^https?://')
+      tags:
+        - edge_health
 
     - name: Select first reachable Go module proxy
       ansible.builtin.set_fact:
@@ -1083,6 +1136,8 @@
               | first
             ) | default('', true)
           }}
+      tags:
+        - edge_health
 
     - name: Check direct Go module origin DNS fallback
       ansible.builtin.command:
@@ -1099,6 +1154,8 @@
       when:
         - (reverse_logger_go_effective_proxy | default('') | length) == 0
         - "'direct' in reverse_logger_go_proxy_candidates"
+      tags:
+        - edge_health
 
     - name: Select direct Go module fallback
       ansible.builtin.set_fact:
@@ -1111,6 +1168,8 @@
           | rejectattr('rc', 'equalto', 0)
           | list
           | length == 0
+      tags:
+        - edge_health
 
     - name: Fail when no Go module source is reachable
       ansible.builtin.fail:
@@ -1121,10 +1180,14 @@
           or set reverse_logger_go_proxy_candidates to a reachable internal proxy.
           Direct fallback DNS hosts: {{ reverse_logger_go_direct_probe_hosts | join(', ') }}.
       when: (reverse_logger_go_effective_proxy | default('') | length) == 0
+      tags:
+        - edge_health
 
     - name: Show selected Go module proxy
       ansible.builtin.debug:
         msg: "Using GOPROXY={{ reverse_logger_go_effective_proxy }} for Go module download."
+      tags:
+        - edge_health
 
     - name: Download Go modules
       ansible.builtin.command:
@@ -1147,6 +1210,8 @@
       until: go_mod_download is succeeded
       retries: "{{ reverse_logger_go_retries | int }}"
       delay: "{{ reverse_logger_go_delay | int }}"
+      tags:
+        - edge_health
 
     - name: Build nginx-edge-forwarder
       ansible.builtin.command:
@@ -1197,6 +1262,8 @@
         GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       changed_when: false
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Install edge-health binary
       ansible.builtin.copy:
@@ -1208,6 +1275,8 @@
         mode: "0755"
       notify: Restart edge-health
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Create reverse_logger config directory
       ansible.builtin.file:
@@ -1216,6 +1285,8 @@
         owner: root
         group: root
         mode: "0750"
+      tags:
+        - edge_health
 
     - name: Create reverse_logger state directories
       ansible.builtin.file:
@@ -1686,6 +1757,8 @@
       no_log: true
       notify: Restart edge-health
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Install nginx-edge-forwarder systemd unit
       ansible.builtin.copy:
@@ -1711,6 +1784,8 @@
         - Reload systemd
         - Restart edge-health
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Render nginx entrypoint configuration
       ansible.builtin.template:
@@ -1749,6 +1824,8 @@
     - name: Reload systemd after unit installation
       ansible.builtin.systemd:
         daemon_reload: true
+      tags:
+        - edge_health
 
     - name: Enable and start nginx-edge-forwarder
       ansible.builtin.systemd:
@@ -1762,6 +1839,8 @@
         enabled: true
         state: started
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
     - name: Register expected VPS health node
       ansible.builtin.uri:
@@ -1782,6 +1861,8 @@
       changed_when: false
       no_log: true
       when: edge_health_enabled | bool
+      tags:
+        - edge_health
 
   post_tasks:
     - name: Show edge deployment summary
