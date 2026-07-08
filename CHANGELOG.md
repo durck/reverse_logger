@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add a configurable dashboard active-session stale cutoff to hide sessions
+  that never delivered a disconnect webhook.
 - Preserve explicit empty Ansible edge-health settings so direct Internet VPS
   edges can disable VPN interface and local systemd checks.
 - Add failed `reverse_ssh` connection attempt events from journals, with

@@ -69,10 +69,37 @@ func TestLoadConfigAcceptsCompleteTelegramConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesDashboardActiveSessionMaxAge(t *testing.T) {
+	setMinimalConfigEnv(t)
+	t.Setenv("DASHBOARD_ACTIVE_SESSION_MAX_AGE", "45m")
+
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Dashboard.ActiveSessionMaxAge.String() != "45m0s" {
+		t.Fatalf("active max age = %s", config.Dashboard.ActiveSessionMaxAge)
+	}
+}
+
+func TestLoadConfigAllowsDisablingDashboardActiveSessionMaxAge(t *testing.T) {
+	setMinimalConfigEnv(t)
+	t.Setenv("DASHBOARD_ACTIVE_SESSION_MAX_AGE", "0s")
+
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Dashboard.ActiveSessionMaxAge != 0 {
+		t.Fatalf("active max age = %s", config.Dashboard.ActiveSessionMaxAge)
+	}
+}
+
 func setMinimalConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"WEBHOOK_TOKEN",
+		"DASHBOARD_ACTIVE_SESSION_MAX_AGE",
 		"TELEGRAM_ENABLED",
 		"TELEGRAM_BOT_TOKEN",
 		"TELEGRAM_CHAT_IDS",

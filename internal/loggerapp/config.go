@@ -22,6 +22,7 @@ type Config struct {
 	IngressWSPath    string
 	IngressPushPath  string
 	Correlation      store.CorrelationConfig
+	Dashboard        store.DashboardConfig
 	EdgeHealth       EdgeHealthConfig
 	Telegram         telegram.Config
 }
@@ -58,6 +59,9 @@ func LoadConfig() (Config, error) {
 		IngressWSPath:    events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
 		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
 		Correlation:      correlation,
+		Dashboard: store.DashboardConfig{
+			ActiveSessionMaxAge: parseDurationOrDefaultAllowZero(os.Getenv("DASHBOARD_ACTIVE_SESSION_MAX_AGE"), store.DefaultDashboardActiveSessionMaxAge),
+		},
 		EdgeHealth: EdgeHealthConfig{
 			Token:           strings.TrimSpace(os.Getenv("EDGE_HEALTH_TOKEN")),
 			DefaultInterval: parseDurationOrDefault(os.Getenv("EDGE_HEALTH_DEFAULT_INTERVAL"), 30*time.Second),
@@ -130,6 +134,18 @@ func parseBoolOrDefault(value string, fallback bool) bool {
 func parseDurationOrDefault(value string, fallback time.Duration) time.Duration {
 	duration, err := time.ParseDuration(strings.TrimSpace(value))
 	if err != nil || duration <= 0 {
+		return fallback
+	}
+	return duration
+}
+
+func parseDurationOrDefaultAllowZero(value string, fallback time.Duration) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
 		return fallback
 	}
 	return duration

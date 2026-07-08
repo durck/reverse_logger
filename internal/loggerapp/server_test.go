@@ -871,6 +871,50 @@ func TestWebhookMatchesWhenVPSInternalIPWrongButForwarderIPObserved(t *testing.T
 	}
 }
 
+func TestWebhookMatchesPublicInternetHTTPSIngressByForwarderIP(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+
+	ingressBody := `{"transport":"https","vps_name":"edge-public","vps_public_ip":"201.51.5.226","client_ip":"212.73.99.133","client_port":5555,"uri":"/push?key=abcdef","method":"HEAD","polling_key_sha1":"1f8ac10f23c5b5bc1167bda84b833e5c057a77d2","nginx_received_at":"2026-07-08T18:54:44Z"}`
+	ingressReq := httptest.NewRequest(http.MethodPost, "/ingress-events/edge-secret", strings.NewReader(ingressBody))
+	ingressReq.RemoteAddr = "201.51.5.226:53000"
+	ingressRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ingressRec, ingressReq)
+	if ingressRec.Code != http.StatusAccepted {
+		t.Fatalf("ingress status = %d body=%s", ingressRec.Code, ingressRec.Body.String())
+	}
+
+	webhookBody := `{"Status":"connected","ID":"abc","IP":"201.51.5.226:443","HostName":"u.c","Timestamp":"2026-07-08T18:54:45Z","Transport":"https"}`
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(webhookBody))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+	if !strings.Contains(webhookRec.Body.String(), `"correlation_status":"matched"`) {
+		t.Fatalf("expected public redirector ingress match: %s", webhookRec.Body.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "enriched_events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"real_client_ip":"212.73.99.133"`, `"vps_public_ip":"201.51.5.226"`, `"forwarder_ip":"201.51.5.226"`} {
+		if !strings.Contains(string(content), want) {
+			t.Fatalf("enriched jsonl missing %s: %s", want, string(content))
+		}
+	}
+}
+
 func TestTrustedProxyWebhookFallsBackToClientIPWhenVPSAddressWrong(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)

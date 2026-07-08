@@ -9,9 +9,20 @@ import (
 )
 
 const (
-	DefaultDashboardEventLimit = 100
-	MaxDashboardEventLimit     = 500
+	DefaultDashboardEventLimit          = 100
+	MaxDashboardEventLimit              = 500
+	DefaultDashboardActiveSessionMaxAge = time.Hour
 )
+
+type DashboardConfig struct {
+	ActiveSessionMaxAge time.Duration
+}
+
+func DefaultDashboardConfig() DashboardConfig {
+	return DashboardConfig{
+		ActiveSessionMaxAge: DefaultDashboardActiveSessionMaxAge,
+	}
+}
 
 type DashboardOverview struct {
 	Window              string                    `json:"window"`
@@ -155,10 +166,11 @@ func (s *Store) DashboardOverview(ctx context.Context, window time.Duration) (Da
 	if overview.Timeline, err = s.dashboardTimeline(ctx, bounds); err != nil {
 		return DashboardOverview{}, err
 	}
-	if overview.ActiveSessions, err = s.dashboardActiveSessions(ctx, 100); err != nil {
+	activeSince := dashboardActiveSince(bounds, s.dashboard.ActiveSessionMaxAge)
+	if overview.ActiveSessions, err = s.dashboardActiveSessions(ctx, 100, activeSince); err != nil {
 		return DashboardOverview{}, err
 	}
-	if overview.Totals.Active, err = s.dashboardActiveSessionCount(ctx); err != nil {
+	if overview.Totals.Active, err = s.dashboardActiveSessionCount(ctx, activeSince); err != nil {
 		return DashboardOverview{}, err
 	}
 
@@ -387,6 +399,17 @@ func formatDashboardWindow(window time.Duration) string {
 	}
 }
 
+func dashboardActiveSince(bounds dashboardTimeBounds, maxAge time.Duration) string {
+	if maxAge <= 0 {
+		return ""
+	}
+	until, err := time.Parse(time.RFC3339Nano, bounds.until)
+	if err != nil {
+		until = time.Now().UTC()
+	}
+	return until.UTC().Add(-maxAge).Format(time.RFC3339Nano)
+}
+
 func normalizeDashboardLimit(limit int) int {
 	if limit <= 0 {
 		return DefaultDashboardEventLimit
@@ -528,8 +551,15 @@ func dashboardHourBucketExpr(hours int) string {
 	)
 }
 
-func (s *Store) dashboardActiveSessions(ctx context.Context, limit int) ([]DashboardEvent, error) {
+func (s *Store) dashboardActiveSessions(ctx context.Context, limit int, activeSince string) ([]DashboardEvent, error) {
 	limit = normalizeDashboardLimit(limit)
+	args := make([]any, 0, 2)
+	activeFilter := ""
+	if strings.TrimSpace(activeSince) != "" {
+		activeFilter = "  AND ee.received_at >= ?\n"
+		args = append(args, activeSince)
+	}
+	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 WITH latest AS (
 	SELECT max(id) AS id
@@ -546,8 +576,9 @@ FROM enriched_events ee
 JOIN latest ON latest.id = ee.id
 LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
 WHERE ee.status = 'connected'
+`+activeFilter+`
 ORDER BY ee.received_at DESC, ee.id DESC
-LIMIT ?`, limit)
+LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -564,8 +595,14 @@ LIMIT ?`, limit)
 	return events, rows.Err()
 }
 
-func (s *Store) dashboardActiveSessionCount(ctx context.Context) (int, error) {
+func (s *Store) dashboardActiveSessionCount(ctx context.Context, activeSince string) (int, error) {
 	var count int
+	args := make([]any, 0, 1)
+	activeFilter := ""
+	if strings.TrimSpace(activeSince) != "" {
+		activeFilter = "  AND ee.received_at >= ?\n"
+		args = append(args, activeSince)
+	}
 	err := s.db.QueryRowContext(ctx, `
 WITH latest AS (
 	SELECT max(id) AS id
@@ -576,7 +613,8 @@ WITH latest AS (
 SELECT count(*)
 FROM enriched_events ee
 JOIN latest ON latest.id = ee.id
-WHERE ee.status = 'connected'`).Scan(&count)
+WHERE ee.status = 'connected'
+`+activeFilter, args...).Scan(&count)
 	return count, err
 }
 
@@ -617,14 +655,15 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 	if err != nil {
 		return err
 	}
-	active := map[string]bool{}
+	active := map[string]time.Time{}
+	maxAge := s.dashboard.ActiveSessionMaxAge
 	eventIndex := 0
 	timelineStart, err := time.Parse(layout, timeline[0].BucketStart)
 	if err != nil {
 		return err
 	}
 	for eventIndex < len(stateEvents) && stateEvents[eventIndex].receivedAt.Before(timelineStart) {
-		applyDashboardSessionState(active, stateEvents[eventIndex])
+		applyDashboardSessionState(active, stateEvents[eventIndex], maxAge)
 		eventIndex++
 	}
 	for i := range timeline {
@@ -636,27 +675,42 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 		if bucketEnd.After(until) {
 			bucketEnd = until
 		}
+		pruneExpiredDashboardSessions(active, bucketStart)
 		peak := len(active)
 		for eventIndex < len(stateEvents) && !stateEvents[eventIndex].receivedAt.After(bucketEnd) {
 			event := stateEvents[eventIndex]
-			applyDashboardSessionState(active, event)
+			pruneExpiredDashboardSessions(active, event.receivedAt)
+			applyDashboardSessionState(active, event, maxAge)
 			if current := len(active); current > peak {
 				peak = current
 			}
 			eventIndex++
 		}
+		pruneExpiredDashboardSessions(active, bucketEnd)
 		timeline[i].Active = peak
 		timeline[i].ActiveEnd = len(active)
 	}
 	return nil
 }
 
-func applyDashboardSessionState(active map[string]bool, event dashboardSessionStateEvent) {
+func applyDashboardSessionState(active map[string]time.Time, event dashboardSessionStateEvent, maxAge time.Duration) {
 	if event.status == "connected" {
-		active[event.reverseSSHID] = true
+		if maxAge <= 0 {
+			active[event.reverseSSHID] = time.Time{}
+			return
+		}
+		active[event.reverseSSHID] = event.receivedAt.Add(maxAge)
 		return
 	}
 	delete(active, event.reverseSSHID)
+}
+
+func pruneExpiredDashboardSessions(active map[string]time.Time, now time.Time) {
+	for id, expiresAt := range active {
+		if !expiresAt.IsZero() && !expiresAt.After(now) {
+			delete(active, id)
+		}
+	}
 }
 
 type dashboardSessionStateEvent struct {

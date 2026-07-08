@@ -258,6 +258,16 @@ Dashboard not reachable:
    your operator IP/VPN source and required VPS edge sources.
 5. Do not route `/dashboard` through the public VPS nginx reverse_ssh endpoint.
 
+Dashboard shows stale active sessions:
+
+1. `Active sessions` is derived from `reverse_ssh` connect/disconnect
+   webhooks. If a disconnect webhook is never delivered, the session is treated
+   as active until it becomes stale.
+2. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`.
+   Increase it for intentionally long-lived sessions, or set `0s` to keep the
+   legacy "active until disconnected" behavior.
+3. Recreate `rssh-logger` after changing this value.
+
 No Telegram alert:
 
 1. For session webhooks, confirm the event status is `connected` or

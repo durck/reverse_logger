@@ -22,6 +22,7 @@ func main() {
 		log.Fatal(err)
 	}
 	st.SetCorrelationConfig(config.Correlation)
+	st.SetDashboardConfig(config.Dashboard)
 	defer st.Close()
 
 	tg, err := telegram.New(config.Telegram)

@@ -22,6 +22,7 @@ type Store struct {
 	reverseSSHErrorLogPath string
 	enrichedLogPath        string
 	correlation            CorrelationConfig
+	dashboard              DashboardConfig
 }
 
 type CorrelationConfig struct {
@@ -91,6 +92,7 @@ func Open(dataDir string) (*Store, error) {
 		reverseSSHErrorLogPath: filepath.Join(dataDir, "reverse_ssh_errors.jsonl"),
 		enrichedLogPath:        filepath.Join(dataDir, "enriched_events.jsonl"),
 		correlation:            DefaultCorrelationConfig(),
+		dashboard:              DefaultDashboardConfig(),
 	}
 
 	if err := store.init(); err != nil {
@@ -103,6 +105,10 @@ func Open(dataDir string) (*Store, error) {
 
 func (s *Store) SetCorrelationConfig(config CorrelationConfig) {
 	s.correlation = config.normalized()
+}
+
+func (s *Store) SetDashboardConfig(config DashboardConfig) {
+	s.dashboard = config
 }
 
 func (s *Store) init() error {

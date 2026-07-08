@@ -346,7 +346,7 @@ func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
 	defer st.Close()
 
 	now := time.Now().UTC()
-	seedDashboardEnrichedForClient(t, st, "live-open", "client-live", "connected", "matched", "wss", "edge-1", "live.host", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-90*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "live-open", "client-live", "connected", "matched", "wss", "edge-1", "live.host", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-30*time.Minute))
 	seedDashboardEnrichedForClient(t, st, "closed-open", "client-closed", "connected", "matched", "wss", "edge-1", "closed.host", "198.51.100.11", "203.0.113.10", "edge1.example.com", now.Add(-80*time.Minute))
 	seedDashboardEnrichedForClient(t, st, "closed-close", "client-closed", "disconnected", "matched", "wss", "edge-1", "closed.host", "198.51.100.11", "203.0.113.10", "edge1.example.com", now.Add(-10*time.Minute))
 
@@ -368,6 +368,33 @@ func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
 	}
 	if overview.Timeline[len(overview.Timeline)-1].ActiveEnd != overview.Totals.Active {
 		t.Fatalf("active timeline tail end = %d, active total = %d, tail=%+v", overview.Timeline[len(overview.Timeline)-1].ActiveEnd, overview.Totals.Active, overview.Timeline[len(overview.Timeline)-1])
+	}
+}
+
+func TestDashboardOverviewExpiresStaleActiveSessions(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.SetDashboardConfig(DashboardConfig{ActiveSessionMaxAge: 30 * time.Minute})
+
+	now := time.Now().UTC()
+	seedDashboardEnrichedForClient(t, st, "stale-open", "client-stale", "connected", "matched", "https", "edge-1", "stale.host", "198.51.100.40", "203.0.113.10", "edge1.example.com", now.Add(-45*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "fresh-open", "client-fresh", "connected", "matched", "https", "edge-1", "fresh.host", "198.51.100.41", "203.0.113.10", "edge1.example.com", now.Add(-10*time.Minute))
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 1 {
+		t.Fatalf("active total = %d, totals=%+v", overview.Totals.Active, overview.Totals)
+	}
+	if len(overview.ActiveSessions) != 1 || overview.ActiveSessions[0].ReverseSSHID != "client-fresh" {
+		t.Fatalf("active sessions = %+v", overview.ActiveSessions)
+	}
+	if tail := overview.Timeline[len(overview.Timeline)-1]; tail.ActiveEnd != 1 {
+		t.Fatalf("active timeline tail end = %d, tail=%+v", tail.ActiveEnd, tail)
 	}
 }
 
@@ -415,6 +442,7 @@ func TestDashboardTimelineSeparatesPeakFromBucketEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	st.SetDashboardConfig(DashboardConfig{ActiveSessionMaxAge: 24 * time.Hour})
 
 	until := time.Date(2026, 7, 1, 15, 45, 0, 0, time.UTC)
 	seedDashboardEnrichedForClient(t, st, "active-one", "client-one", "connected", "matched", "wss", "edge-1", "one.host", "198.51.100.30", "203.0.113.10", "edge1.example.com", until.Add(-3*time.Hour))
