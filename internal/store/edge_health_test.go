@@ -39,11 +39,18 @@ func TestEdgeHealthTransitionsOKDegradedDownOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if shouldAlert {
+		t.Fatalf("first degraded report should wait for confirmation: %+v", transition)
+	}
+
+	transition, shouldAlert, err = st.RecordEdgeHealthReport(degradedReport, []byte(`{}`), base.Add(31*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !shouldAlert || transition.PreviousStatus != edgehealth.StatusOK || transition.CurrentStatus != edgehealth.StatusDegraded {
 		t.Fatalf("unexpected degraded transition alert=%v transition=%+v", shouldAlert, transition)
 	}
-
-	_, shouldAlert, err = st.RecordEdgeHealthReport(degradedReport, []byte(`{}`), base.Add(31*time.Second))
+	_, shouldAlert, err = st.RecordEdgeHealthReport(degradedReport, []byte(`{}`), base.Add(32*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +58,7 @@ func TestEdgeHealthTransitionsOKDegradedDownOK(t *testing.T) {
 		t.Fatal("repeated degraded report should not alert")
 	}
 
-	transitions, err := st.EvaluateEdgeHealthTransitions(context.Background(), base.Add(122*time.Second), 30*time.Second, 3, DefaultEdgeHealthBootstrapGrace)
+	transitions, err := st.EvaluateEdgeHealthTransitions(context.Background(), base.Add(123*time.Second), 30*time.Second, 3, DefaultEdgeHealthBootstrapGrace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,17 +66,41 @@ func TestEdgeHealthTransitionsOKDegradedDownOK(t *testing.T) {
 		t.Fatalf("unexpected stale transitions: %+v", transitions)
 	}
 
-	recovery := edgeHealthReport(edgehealth.StatusOK, base.Add(123*time.Second), edgehealth.Check{
+	recovery := edgeHealthReport(edgehealth.StatusOK, base.Add(124*time.Second), edgehealth.Check{
 		Name:     "reverse_ssh_tcp",
 		Status:   edgehealth.CheckStatusOK,
 		Required: true,
 	})
-	transition, shouldAlert, err = st.RecordEdgeHealthReport(recovery, []byte(`{}`), base.Add(123*time.Second))
+	transition, shouldAlert, err = st.RecordEdgeHealthReport(recovery, []byte(`{}`), base.Add(124*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !shouldAlert || transition.PreviousStatus != edgehealth.StatusDown || transition.CurrentStatus != edgehealth.StatusOK {
 		t.Fatalf("unexpected recovery transition alert=%v transition=%+v", shouldAlert, transition)
+	}
+}
+
+func TestEdgeHealthDoesNotAlertRecoveryWhenDegradedWasNotNotified(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	if _, shouldAlert, err := st.RecordEdgeHealthReport(edgeHealthReport(edgehealth.StatusOK, base), []byte(`{}`), base); err != nil || shouldAlert {
+		t.Fatalf("ok alert=%v err=%v", shouldAlert, err)
+	}
+	degradedReport := edgeHealthReport(edgehealth.StatusDegraded, base.Add(30*time.Second), edgehealth.Check{
+		Name:     "logger_health",
+		Status:   edgehealth.CheckStatusFailed,
+		Required: true,
+	})
+	if _, shouldAlert, err := st.RecordEdgeHealthReport(degradedReport, []byte(`{}`), base.Add(30*time.Second)); err != nil || shouldAlert {
+		t.Fatalf("first degraded alert=%v err=%v", shouldAlert, err)
+	}
+	if transition, shouldAlert, err := st.RecordEdgeHealthReport(edgeHealthReport(edgehealth.StatusOK, base.Add(time.Minute)), []byte(`{}`), base.Add(time.Minute)); err != nil || shouldAlert {
+		t.Fatalf("recovery after unnotified degraded alert=%v transition=%+v err=%v", shouldAlert, transition, err)
 	}
 }
 

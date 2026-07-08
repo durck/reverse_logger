@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Suppress transient edge-health Telegram flaps by requiring two consecutive
+  degraded reports before sending a degraded alert.
 - Add a configurable dashboard active-session stale cutoff to hide sessions
   that never delivered a disconnect webhook.
 - Preserve explicit empty Ansible edge-health settings so direct Internet VPS

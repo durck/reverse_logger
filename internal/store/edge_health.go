@@ -10,7 +10,15 @@ import (
 	"github.com/durck/reverse_logger/internal/edgehealth"
 )
 
-const DefaultEdgeHealthBootstrapGrace = 2 * time.Minute
+const (
+	DefaultEdgeHealthBootstrapGrace       = 2 * time.Minute
+	DefaultEdgeHealthDegradedAlertReports = 2
+)
+
+type edgeHealthStoredState struct {
+	status         string
+	notifiedStatus string
+}
 
 type EdgeHealthSummary struct {
 	Total    int `json:"total"`
@@ -163,7 +171,7 @@ func (s *Store) RecordEdgeHealthReport(report edgehealth.Report, raw []byte, rec
 	if err != nil {
 		return EdgeHealthTransition{}, false, err
 	}
-	previousStatus, err := s.edgeHealthStoredStatus(report.VPSName)
+	previousState, err := s.edgeHealthStoredState(report.VPSName)
 	if err != nil {
 		return EdgeHealthTransition{}, false, err
 	}
@@ -256,6 +264,30 @@ ON CONFLICT(vps_name) DO UPDATE SET
 		return EdgeHealthTransition{}, false, err
 	}
 
+	consecutiveDegraded := 0
+	if report.Status == edgehealth.StatusDegraded {
+		consecutiveDegraded, err = s.countConsecutiveEdgeHealthReports(report.VPSName, edgehealth.StatusDegraded, DefaultEdgeHealthDegradedAlertReports)
+		if err != nil {
+			return EdgeHealthTransition{}, false, err
+		}
+	}
+
+	previousStatus := strings.TrimSpace(previousState.status)
+	alertPreviousStatus := previousStatus
+	shouldAlert := shouldAlertEdgeHealthReport(previousState, report.Status, consecutiveDegraded, DefaultEdgeHealthDegradedAlertReports)
+	if shouldAlert && report.Status == edgehealth.StatusDegraded && previousStatus == edgehealth.StatusDegraded {
+		if stableStatus, ok, err := s.previousEdgeHealthReportStatus(report.VPSName, edgehealth.StatusDegraded); err != nil {
+			return EdgeHealthTransition{}, false, err
+		} else if ok {
+			alertPreviousStatus = stableStatus
+		}
+	}
+	if shouldAlert {
+		if err := s.MarkEdgeHealthNotified(report.VPSName, report.Status); err != nil {
+			return EdgeHealthTransition{}, false, err
+		}
+	}
+
 	node := EdgeHealthNodeStatus{
 		VPSName:          report.VPSName,
 		VPSPublicIP:      report.VPSPublicIP,
@@ -270,10 +302,10 @@ ON CONFLICT(vps_name) DO UPDATE SET
 		LastOKAt:         lastOKAt,
 		CheckedAt:        report.CheckedAt.Format(time.RFC3339Nano),
 		UpdatedAt:        nowText,
-		storedStatus:     previousStatus,
+		storedStatus:     previousState.status,
 	}
-	transition := EdgeHealthTransition{PreviousStatus: previousStatus, CurrentStatus: report.Status, Node: node}
-	return transition, ShouldAlertEdgeHealthTransition(previousStatus, report.Status), nil
+	transition := EdgeHealthTransition{PreviousStatus: alertPreviousStatus, CurrentStatus: report.Status, Node: node}
+	return transition, shouldAlert, nil
 }
 
 func (s *Store) EdgeHealthOverview(ctx context.Context, now time.Time, defaultInterval time.Duration, defaultMissedReports int, bootstrapGrace time.Duration) (EdgeHealthOverview, error) {
@@ -412,16 +444,84 @@ func ShouldAlertEdgeHealthTransition(previous, current string) bool {
 	}
 }
 
-func (s *Store) edgeHealthStoredStatus(vpsName string) (string, error) {
-	var status string
-	err := s.db.QueryRow(`SELECT status FROM edge_health_state WHERE vps_name = ?`, strings.TrimSpace(vpsName)).Scan(&status)
+func shouldAlertEdgeHealthReport(previous edgeHealthStoredState, current string, consecutiveCurrentReports, degradedAlertReports int) bool {
+	current = strings.ToLower(strings.TrimSpace(current))
+	previousStatus := strings.ToLower(strings.TrimSpace(previous.status))
+	notifiedStatus := strings.ToLower(strings.TrimSpace(previous.notifiedStatus))
+	if current == "" || current == notifiedStatus {
+		return false
+	}
+	switch current {
+	case edgehealth.StatusDegraded:
+		if degradedAlertReports <= 0 {
+			degradedAlertReports = DefaultEdgeHealthDegradedAlertReports
+		}
+		return consecutiveCurrentReports >= degradedAlertReports && (previousStatus == edgehealth.StatusOK || previousStatus == edgehealth.StatusDegraded)
+	case edgehealth.StatusOK:
+		return notifiedStatus == edgehealth.StatusDown || notifiedStatus == edgehealth.StatusDegraded
+	case edgehealth.StatusDown:
+		return previousStatus == edgehealth.StatusOK || previousStatus == edgehealth.StatusDegraded || previousStatus == edgehealth.StatusUnknown
+	default:
+		return false
+	}
+}
+
+func (s *Store) edgeHealthStoredState(vpsName string) (edgeHealthStoredState, error) {
+	var state edgeHealthStoredState
+	err := s.db.QueryRow(`SELECT status, coalesce(notified_status, '') FROM edge_health_state WHERE vps_name = ?`, strings.TrimSpace(vpsName)).Scan(&state.status, &state.notifiedStatus)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return edgeHealthStoredState{}, nil
 	}
 	if err != nil {
-		return "", err
+		return edgeHealthStoredState{}, err
 	}
-	return status, nil
+	return state, nil
+}
+
+func (s *Store) countConsecutiveEdgeHealthReports(vpsName, status string, max int) (int, error) {
+	if max <= 0 {
+		max = 1
+	}
+	rows, err := s.db.Query(`
+SELECT status
+FROM edge_health_reports
+WHERE vps_name = ?
+ORDER BY received_at DESC, id DESC
+LIMIT ?`, strings.TrimSpace(vpsName), max)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	status = strings.ToLower(strings.TrimSpace(status))
+	count := 0
+	for rows.Next() {
+		var seen string
+		if err := rows.Scan(&seen); err != nil {
+			return 0, err
+		}
+		if strings.ToLower(strings.TrimSpace(seen)) != status {
+			break
+		}
+		count++
+	}
+	return count, rows.Err()
+}
+
+func (s *Store) previousEdgeHealthReportStatus(vpsName, status string) (string, bool, error) {
+	var previous string
+	err := s.db.QueryRow(`
+SELECT status
+FROM edge_health_reports
+WHERE vps_name = ? AND status <> ?
+ORDER BY received_at DESC, id DESC
+LIMIT 1`, strings.TrimSpace(vpsName), strings.ToLower(strings.TrimSpace(status))).Scan(&previous)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return previous, true, nil
 }
 
 func (s *Store) updateEdgeHealthEffectiveStatus(node EdgeHealthNodeStatus, now time.Time) error {

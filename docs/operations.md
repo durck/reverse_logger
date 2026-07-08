@@ -274,14 +274,17 @@ No Telegram alert:
    `disconnected`.
 2. For failed attempt alerts, confirm `rssh-error-forwarder` is running and
    `reverse_ssh_errors.jsonl` receives rows.
-3. Check `TELEGRAM_ENABLED=true`.
-4. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
-5. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
-6. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
+3. For edge health, a `degraded` Telegram alert is sent only after two
+   consecutive degraded reports from the same VPS. A single failed
+   `logger_health` check is kept in the dashboard but does not alert.
+4. Check `TELEGRAM_ENABLED=true`.
+5. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
+6. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
+7. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
    prove the bot can write to that chat. Use a temporary `curl --config` file
    as shown in `telegram-proxy.md` so tokens and proxy credentials are not
    exposed in process arguments.
-7. Check `docker compose logs rssh-logger` and
+8. Check `docker compose logs rssh-logger` and
    `journalctl -u rssh-error-forwarder -n 100 --no-pager`.
 
 No VPS health alert:

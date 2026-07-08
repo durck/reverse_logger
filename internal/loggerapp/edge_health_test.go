@@ -161,6 +161,18 @@ func TestEdgeHealthTelegramAlertDoesNotDuplicateSameState(t *testing.T) {
 	}
 	select {
 	case text := <-sent:
+		t.Fatalf("first degraded report should not alert: %s", text)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/edge-health/health-secret", strings.NewReader(degraded))
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("second degraded status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case text := <-sent:
 		if !strings.Contains(text, "edge health DEGRADED") || !strings.Contains(text, "alert_id: edge-health:vps-1:degraded") {
 			t.Fatalf("unexpected alert text: %s", text)
 		}
