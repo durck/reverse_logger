@@ -243,6 +243,52 @@ func TestEnrichFallsBackToUniqueIngressWhenProxyMetadataDoesNotMatch(t *testing.
 	}
 }
 
+func TestEnrichHTTPSFallsBackWhenWebhookReportsProxyAsClient(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Date(2026, 7, 8, 14, 20, 26, 0, time.UTC)
+	ingress, err := events.NormalizeIngressEvent(events.IngressEvent{
+		Transport:       "https",
+		VPSName:         "edge-1",
+		ForwarderIP:     "10.21.125.98",
+		ClientIP:        "212.73.99.133",
+		ClientPort:      53000,
+		Host:            "updatewebrtc.ru",
+		URI:             "/push?key=abcdef",
+		Method:          "HEAD",
+		PollingKeySHA1:  "a9993e364706816aba3e25717850c26c9cd0d89d",
+		NginxReceivedAt: now.Add(-2 * time.Second),
+		ForwardedAt:     now.Add(-time.Second),
+	}, now.Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := st.InsertIngressEvent(ingress); err != nil || !inserted {
+		t.Fatalf("insert ingress inserted=%v err=%v", inserted, err)
+	}
+
+	webhook := []byte(`{"Status":"connected","ID":"abc","IP":"10.21.125.98:55644","HostName":"wdc01-syorlov.danii.wdc01-syorlov","Transport":"https","ProxySourceIP":"10.21.125.98:443","Timestamp":"2026-07-08T14:20:26Z"}`)
+	event, err := events.ParseWebhookPayload(webhook, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enriched, _, err := st.EnrichAndStoreEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enriched.CorrelationStatus != "matched" || enriched.CorrelationMethod != "unique-time-fallback" {
+		t.Fatalf("correlation = %s/%s, enriched=%+v", enriched.CorrelationStatus, enriched.CorrelationMethod, enriched)
+	}
+	if enriched.RealClientIP != ingress.ClientIP || enriched.IngressEventHash != ingress.EventHash || enriched.Transport != "https" {
+		t.Fatalf("https ingress metadata was not attached: %+v", enriched)
+	}
+}
+
 func TestDashboardOverviewEmptyStoreReturnsZeroSummary(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

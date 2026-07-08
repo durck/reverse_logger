@@ -884,7 +884,7 @@ func (s *Store) findIngressForEvent(event events.Event) (*events.IngressEvent, s
 	}
 
 	trustedProxySourceMatched := false
-	if event.ProxySourceIP != "" && event.IPAddr != "" {
+	if event.ProxySourceIP != "" && event.IPAddr != "" && event.IPAddr != event.ProxySourceIP {
 		condition := "(vps_internal_ip = ? OR vps_public_ip = ? OR forwarder_ip = ?)"
 		args := []any{event.ProxySourceIP, event.ProxySourceIP, event.ProxySourceIP}
 		if event.Transport != "" {

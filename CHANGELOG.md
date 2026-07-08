@@ -13,6 +13,8 @@
   page with type, severity, and search filters.
 - Match dashboard sessions to a single time-window ingress candidate even when
   webhook proxy metadata contradicts VPS/client IP fields.
+- Allow HTTPS ingress correlation when the webhook reports the proxy/VPS IP as
+  the client IP and the real client IP is only present in nginx ingress data.
 - Keep the dashboard usable when one journal API panel fails by rendering
   successful panels and surfacing the failed endpoint in the status line.
 - Add VPS edge health push-agent monitoring with central health state,
