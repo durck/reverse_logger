@@ -284,12 +284,14 @@ No Telegram alert:
    `logger_health` check is kept in the dashboard but does not alert.
 4. Check `TELEGRAM_ENABLED=true`.
 5. Check that `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_IDS` are non-empty.
-6. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
-7. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
+6. If `TELEGRAM_ALERT_MODE=rich`, confirm the upstream Bot API supports
+   `sendRichMessage`; unsupported-method responses fall back to HTML alerts.
+7. Smoke-test `getMe` through `TELEGRAM_PROXY_URL`.
+8. Smoke-test `sendMessage` to the first configured chat ID; `getMe` does not
    prove the bot can write to that chat. Use a temporary `curl --config` file
    as shown in `telegram-proxy.md` so tokens and proxy credentials are not
    exposed in process arguments.
-8. Check `docker compose logs rssh-logger` and
+9. Check `docker compose logs rssh-logger` and
    `journalctl -u rssh-error-forwarder -n 100 --no-pager`.
 
 No VPS health alert:

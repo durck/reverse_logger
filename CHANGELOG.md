@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Render Telegram alerts as structured HTML messages, add optional Bot API 10.1
+  Rich Message delivery with HTML fallback, and include enriched routing context
+  in connection alerts.
 - Prefer a clearly nearest ingress candidate during session correlation so
   stale HTTPS captures in the same match window do not force `ambiguous`.
 - Suppress transient edge-health Telegram flaps by requiring two consecutive

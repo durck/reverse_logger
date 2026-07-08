@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -271,6 +272,144 @@ func TestSendMessageWithResultReturnsMessageID(t *testing.T) {
 	}
 }
 
+func TestSendFormattedMessageUsesHTMLParseMode(t *testing.T) {
+	var gotPath, gotText, gotParseMode string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		gotText = r.Form.Get("text")
+		gotParseMode = r.Form.Get("parse_mode")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":7}}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:  true,
+		BotToken: "token",
+		ChatIDs:  []string{"123"},
+		APIBase:  api.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.SendFormattedMessageWithResult(context.Background(), "123", FormattedMessage{
+		Plain: "plain alert",
+		HTML:  "<b>html alert</b>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != 7 {
+		t.Fatalf("message ID = %d, want 7", result.MessageID)
+	}
+	if gotPath != "/bottoken/sendMessage" || gotParseMode != "HTML" || gotText != "<b>html alert</b>" {
+		t.Fatalf("unexpected request path=%q parse_mode=%q text=%q", gotPath, gotParseMode, gotText)
+	}
+}
+
+func TestSendFormattedMessageUsesRichMode(t *testing.T) {
+	var payload struct {
+		ChatID      int64 `json:"chat_id"`
+		RichMessage struct {
+			HTML                string `json:"html"`
+			SkipEntityDetection bool   `json:"skip_entity_detection"`
+		} `json:"rich_message"`
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendRichMessage" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":9}}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:   true,
+		BotToken:  "token",
+		ChatIDs:   []string{"123"},
+		APIBase:   api.URL,
+		AlertMode: string(AlertModeRich),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.SendFormattedMessageWithResult(context.Background(), "123", FormattedMessage{
+		Plain:    "plain alert",
+		HTML:     "<b>html alert</b>",
+		RichHTML: "<h3>rich alert</h3>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != 9 {
+		t.Fatalf("message ID = %d, want 9", result.MessageID)
+	}
+	if payload.ChatID != 123 || payload.RichMessage.HTML != "<h3>rich alert</h3>" || !payload.RichMessage.SkipEntityDetection {
+		t.Fatalf("unexpected rich payload: %+v", payload)
+	}
+}
+
+func TestSendFormattedMessageFallsBackWhenRichUnsupported(t *testing.T) {
+	paths := make([]string, 0, 2)
+	var fallbackText, fallbackParseMode string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/bottoken/sendRichMessage" {
+			writeTelegramError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		if r.URL.Path != "/bottoken/sendMessage" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		fallbackText = r.Form.Get("text")
+		fallbackParseMode = r.Form.Get("parse_mode")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":10}}`))
+	}))
+	defer api.Close()
+
+	client, err := New(Config{
+		Enabled:   true,
+		BotToken:  "token",
+		ChatIDs:   []string{"123"},
+		APIBase:   api.URL,
+		AlertMode: string(AlertModeRich),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.SendFormattedMessageWithResult(context.Background(), "123", FormattedMessage{
+		Plain:    "plain alert",
+		HTML:     "<b>html alert</b>",
+		RichHTML: "<h3>rich alert</h3>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != 10 {
+		t.Fatalf("message ID = %d, want 10", result.MessageID)
+	}
+	if len(paths) != 2 || paths[0] != "/bottoken/sendRichMessage" || paths[1] != "/bottoken/sendMessage" {
+		t.Fatalf("paths = %#v", paths)
+	}
+	if fallbackParseMode != "HTML" || fallbackText != "<b>html alert</b>" {
+		t.Fatalf("unexpected fallback parse_mode=%q text=%q", fallbackParseMode, fallbackText)
+	}
+}
+
 func TestNewValidatesEnabledConfig(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -293,6 +432,16 @@ func TestNewValidatesEnabledConfig(t *testing.T) {
 				ChatIDs:  []string{" "},
 			},
 			want: "chat IDs",
+		},
+		{
+			name: "invalid alert mode",
+			config: Config{
+				Enabled:   true,
+				BotToken:  "token",
+				ChatIDs:   []string{"123"},
+				AlertMode: "fancy",
+			},
+			want: "alert mode",
 		},
 	}
 
@@ -391,6 +540,44 @@ func TestFormatEventMessageIncludesFields(t *testing.T) {
 		if !strings.Contains(message, want) {
 			t.Fatalf("message missing %q: %s", want, message)
 		}
+	}
+}
+
+func TestFormatEnrichedEventAlertIncludesRoutingContextAndEscapesHTML(t *testing.T) {
+	message := FormatEnrichedEventAlert(events.EnrichedEvent{
+		SourceEventHash:   "1234567890abcdef",
+		CorrelationStatus: "matched",
+		CorrelationMethod: "nearest_time",
+		Status:            "connected",
+		ReverseSSHID:      "abc",
+		HostName:          "user.<host>",
+		UserName:          "user",
+		ComputerName:      "<host>",
+		IPRaw:             "192.0.2.1:5555",
+		IPAddr:            "192.0.2.1",
+		IPPort:            5555,
+		RealClientIP:      "198.51.100.10",
+		ClientPort:        53000,
+		Transport:         "wss",
+		VPSName:           "edge-1",
+		VPSPublicIP:       "203.0.113.20",
+		ReceivedAt:        time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	})
+	for _, want := range []string{
+		"real_client: 198.51.100.10:53000",
+		"vps: edge-1",
+		"correlation: matched/nearest_time",
+		"alert_id: 1234567890ab",
+	} {
+		if !strings.Contains(message.Plain, want) {
+			t.Fatalf("plain message missing %q:\n%s", want, message.Plain)
+		}
+	}
+	if !strings.Contains(message.HTML, "user.&lt;host&gt;") {
+		t.Fatalf("html message did not escape host: %s", message.HTML)
+	}
+	if !strings.Contains(message.RichHTML, "<table bordered striped>") || !strings.Contains(message.RichHTML, "<caption>Ingress</caption>") {
+		t.Fatalf("rich message missing tables: %s", message.RichHTML)
 	}
 }
 

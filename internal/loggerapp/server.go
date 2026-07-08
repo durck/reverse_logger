@@ -149,7 +149,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := s.notifyTelegramEvent(ctx, event); err != nil {
+			if err := s.notifyTelegramEnrichedEvent(ctx, enriched); err != nil {
 				log.Printf("telegram alert failed: %v", err)
 			}
 		}()
@@ -166,6 +166,10 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) error {
+	return s.notifyTelegramEnrichedEvent(ctx, events.NewEnrichedEvent(event, nil, ""))
+}
+
+func (s *Server) notifyTelegramEnrichedEvent(ctx context.Context, event events.EnrichedEvent) error {
 	if !s.telegram.Enabled() {
 		return nil
 	}
@@ -174,7 +178,11 @@ func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) er
 		return nil
 	}
 
-	message := telegram.FormatEventMessage(event)
+	message := telegram.FormatEnrichedEventAlert(event)
+	deliveryHash := strings.TrimSpace(event.SourceEventHash)
+	if deliveryHash == "" {
+		deliveryHash = strings.TrimSpace(event.EventHash)
+	}
 	chatIDs := s.telegram.ChatIDs()
 	errs := make([]error, len(chatIDs))
 	var wg sync.WaitGroup
@@ -184,7 +192,7 @@ func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) er
 		go func() {
 			defer wg.Done()
 
-			claimed, err := s.store.ClaimTelegramDelivery(event.EventHash, chatID, telegramDeliveryClaimStaleAfter)
+			claimed, err := s.store.ClaimTelegramDelivery(deliveryHash, chatID, telegramDeliveryClaimStaleAfter)
 			if err != nil {
 				errs[i] = fmt.Errorf("recipient %d delivery claim: %w", i+1, err)
 				return
@@ -193,16 +201,16 @@ func (s *Server) notifyTelegramEvent(ctx context.Context, event events.Event) er
 				return
 			}
 
-			result, err := s.telegram.SendMessageWithResult(ctx, chatID, message)
+			result, err := s.telegram.SendFormattedMessageWithResult(ctx, chatID, message)
 			if err != nil {
-				if markErr := s.store.MarkTelegramDeliveryFailed(event.EventHash, chatID, err); markErr != nil {
+				if markErr := s.store.MarkTelegramDeliveryFailed(deliveryHash, chatID, err); markErr != nil {
 					errs[i] = fmt.Errorf("recipient %d: %w", i+1, errors.Join(err, markErr))
 					return
 				}
 				errs[i] = fmt.Errorf("recipient %d: %w", i+1, err)
 				return
 			}
-			if err := s.store.MarkTelegramDeliverySent(event.EventHash, chatID, result.MessageID); err != nil {
+			if err := s.store.MarkTelegramDeliverySent(deliveryHash, chatID, result.MessageID); err != nil {
 				errs[i] = fmt.Errorf("recipient %d delivery sent marker: %w", i+1, err)
 			}
 		}()
@@ -402,7 +410,7 @@ func (s *Server) notifyTelegramReverseSSHError(ctx context.Context, event events
 		return nil
 	}
 
-	message := telegram.FormatReverseSSHErrorMessage(event)
+	message := telegram.FormatReverseSSHErrorAlert(event)
 	chatIDs := s.telegram.ChatIDs()
 	errs := make([]error, len(chatIDs))
 	var wg sync.WaitGroup
@@ -421,7 +429,7 @@ func (s *Server) notifyTelegramReverseSSHError(ctx context.Context, event events
 				return
 			}
 
-			result, err := s.telegram.SendMessageWithResult(ctx, chatID, message)
+			result, err := s.telegram.SendFormattedMessageWithResult(ctx, chatID, message)
 			if err != nil {
 				if markErr := s.store.MarkReverseSSHErrorTelegramDeliveryFailed(event.EventHash, chatID, err); markErr != nil {
 					errs[i] = fmt.Errorf("recipient %d: %w", i+1, errors.Join(err, markErr))

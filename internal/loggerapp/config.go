@@ -70,12 +70,13 @@ func LoadConfig() (Config, error) {
 			MonitorInterval: parseDurationOrDefault(os.Getenv("EDGE_HEALTH_MONITOR_INTERVAL"), 30*time.Second),
 		},
 		Telegram: telegram.Config{
-			Enabled:  telegramEnabled,
-			BotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-			ChatIDs:  telegram.SplitChatIDs(os.Getenv("TELEGRAM_CHAT_IDS")),
-			ProxyURL: strings.TrimSpace(os.Getenv("TELEGRAM_PROXY_URL")),
-			APIBase:  strings.TrimSpace(os.Getenv("TELEGRAM_API_BASE")),
-			Timeout:  5 * time.Second,
+			Enabled:   telegramEnabled,
+			BotToken:  strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
+			ChatIDs:   telegram.SplitChatIDs(os.Getenv("TELEGRAM_CHAT_IDS")),
+			ProxyURL:  strings.TrimSpace(os.Getenv("TELEGRAM_PROXY_URL")),
+			APIBase:   strings.TrimSpace(os.Getenv("TELEGRAM_API_BASE")),
+			Timeout:   5 * time.Second,
+			AlertMode: strings.TrimSpace(os.Getenv("TELEGRAM_ALERT_MODE")),
 		},
 	}
 

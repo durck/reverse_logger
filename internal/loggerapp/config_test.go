@@ -53,6 +53,7 @@ func TestLoadConfigAcceptsCompleteTelegramConfig(t *testing.T) {
 	t.Setenv("TELEGRAM_ENABLED", "true")
 	t.Setenv("TELEGRAM_BOT_TOKEN", " token ")
 	t.Setenv("TELEGRAM_CHAT_IDS", " 123, 456 ")
+	t.Setenv("TELEGRAM_ALERT_MODE", "rich")
 
 	config, err := LoadConfig()
 	if err != nil {
@@ -66,6 +67,9 @@ func TestLoadConfigAcceptsCompleteTelegramConfig(t *testing.T) {
 	}
 	if len(config.Telegram.ChatIDs) != 2 || config.Telegram.ChatIDs[0] != "123" || config.Telegram.ChatIDs[1] != "456" {
 		t.Fatalf("chat IDs = %#v", config.Telegram.ChatIDs)
+	}
+	if config.Telegram.AlertMode != "rich" {
+		t.Fatalf("alert mode = %q", config.Telegram.AlertMode)
 	}
 }
 
@@ -105,6 +109,7 @@ func setMinimalConfigEnv(t *testing.T) {
 		"TELEGRAM_CHAT_IDS",
 		"TELEGRAM_PROXY_URL",
 		"TELEGRAM_API_BASE",
+		"TELEGRAM_ALERT_MODE",
 	} {
 		t.Setenv(name, "")
 	}

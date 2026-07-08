@@ -163,17 +163,22 @@ func (s *Server) notifyTelegramEdgeHealthTransition(transition store.EdgeHealthT
 		return
 	}
 	alert := telegram.HealthAlert{
-		VPSName:        transition.Node.VPSName,
-		PreviousStatus: transition.PreviousStatus,
-		Status:         transition.CurrentStatus,
-		VPSPublicIP:    transition.Node.VPSPublicIP,
-		VPSInternalIP:  transition.Node.VPSInternalIP,
-		FailedChecks:   transition.Node.FailedChecks,
-		LastSeenAt:     transition.Node.LastSeenAt,
-		LastOKAt:       transition.Node.LastOKAt,
-		AlertID:        healthAlertID(transition.Node.VPSName, transition.CurrentStatus),
+		VPSName:          transition.Node.VPSName,
+		PreviousStatus:   transition.PreviousStatus,
+		Status:           transition.CurrentStatus,
+		VPSPublicIP:      transition.Node.VPSPublicIP,
+		VPSInternalIP:    transition.Node.VPSInternalIP,
+		FailedChecks:     transition.Node.FailedChecks,
+		LastReportStatus: transition.Node.LastReportStatus,
+		LastSeenAt:       transition.Node.LastSeenAt,
+		LastOKAt:         transition.Node.LastOKAt,
+		CheckedAt:        transition.Node.CheckedAt,
+		StaleAfter:       transition.Node.StaleAfter,
+		IntervalSeconds:  transition.Node.IntervalSeconds,
+		MissedReports:    transition.Node.MissedReports,
+		AlertID:          healthAlertID(transition.Node.VPSName, transition.CurrentStatus),
 	}
-	message := telegram.FormatHealthAlertMessage(alert)
+	message := telegram.FormatHealthAlert(alert)
 	chatIDs := s.telegram.ChatIDs()
 	errs := make([]error, len(chatIDs))
 	var wg sync.WaitGroup
@@ -184,7 +189,7 @@ func (s *Server) notifyTelegramEdgeHealthTransition(transition store.EdgeHealthT
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if _, err := s.telegram.SendMessageWithResult(ctx, chatID, message); err != nil {
+			if _, err := s.telegram.SendFormattedMessageWithResult(ctx, chatID, message); err != nil {
 				errs[i] = fmt.Errorf("recipient %d: %w", i+1, err)
 			}
 		}()

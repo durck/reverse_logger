@@ -998,6 +998,10 @@ If the main server cannot reach Telegram directly, configure the proxy on a
 VPS using [telegram-proxy.md](telegram-proxy.md). Then smoke-test from the main
 server:
 
+Alerts use `TELEGRAM_ALERT_MODE=html` by default. Set it to `rich` to use
+Telegram Bot API 10.1 Rich Messages; if the API endpoint does not support
+`sendRichMessage`, delivery falls back to the HTML `sendMessage` format.
+
 ```sh
 telegram_curl_config="$(mktemp)"
 chmod 600 "$telegram_curl_config"
