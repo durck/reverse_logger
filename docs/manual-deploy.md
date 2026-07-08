@@ -491,9 +491,10 @@ For `edge-health.env`, set at minimum:
 - `EDGE_HEALTH_LOGGER_HEALTH_URL`:
   `http://<LOGGER_BIND_IP>:<LOGGER_BIND_PORT>/healthz`.
 - `EDGE_HEALTH_VPN_IFACE`: SoftEther interface, for example `vpn_softether`;
-  leave empty only if connectivity checks are enough for that VPS.
+  leave empty when VPS edges reach main directly over the public Internet.
 - `EDGE_HEALTH_SYSTEMD_SERVICES`: comma-separated local services to verify,
-  normally `nginx,nginx-edge-forwarder`.
+  normally `nginx,nginx-edge-forwarder`; leave empty to monitor only
+  main port and health endpoint availability.
 
 `VPS_INTERNAL_IP` should be the source IP observed by the main server, not the
 VPS interface address. You can read it from the main logger by calling

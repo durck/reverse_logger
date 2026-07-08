@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Preserve explicit empty Ansible edge-health settings so direct Internet VPS
+  edges can disable VPN interface and local systemd checks.
 - Add failed `reverse_ssh` connection attempt events from journals, with
   central storage, dashboard connection-event panel, Telegram alerts, and a
   `rssh-error-forwarder` systemd service template.

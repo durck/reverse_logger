@@ -88,9 +88,9 @@
         edge_health_timeout: "{{ edge_health_timeout | default('5s', true) }}"
         edge_health_missed_reports: "{{ edge_health_missed_reports | default(3, true) }}"
         edge_health_bootstrap_grace_seconds: "{{ edge_health_bootstrap_grace_seconds | default(120, true) }}"
-        edge_health_vpn_iface: "{{ edge_health_vpn_iface | default('vpn_softether', true) }}"
-        edge_health_softether_service: "{{ edge_health_softether_service | default('', true) }}"
-        edge_health_local_services: "{{ edge_health_local_services | default(['nginx', 'nginx-edge-forwarder'], true) }}"
+        edge_health_vpn_iface: "{{ edge_health_vpn_iface | default('vpn_softether') }}"
+        edge_health_softether_service: "{{ edge_health_softether_service | default('') }}"
+        edge_health_local_services: "{{ edge_health_local_services | default(['nginx', 'nginx-edge-forwarder']) }}"
       tags: always
 
     - name: Point /etc/resolv.conf at systemd-resolved runtime config

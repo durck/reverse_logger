@@ -1,7 +1,7 @@
 # Ansible VPS Edge Deployment
 
 Deploy one or many public VPS edges that terminate TLS and forward to the same
-internal `reverse_ssh` + `rssh-logger` stack over SoftEther/VPN.
+`reverse_ssh` + `rssh-logger` stack over SoftEther/VPN or the public Internet.
 
 Repository references:
 
@@ -26,6 +26,11 @@ The playbook owns the VPS edge layer only:
 
 It does **not** provision SoftEther accounts, DNS records, cloud firewall rules,
 or the main `reverse_ssh` server itself.
+
+For direct Internet topology, set `main_internal_ip` to the main public
+address or DNS name, set `edge_health_vpn_iface: ""`, and set
+`edge_health_local_services: []` when edge health should only verify main port
+and logger endpoint availability.
 
 ## Multi-VPS layout
 
