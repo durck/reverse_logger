@@ -553,10 +553,10 @@ func ClassifyReverseSSHLogLine(line string) (reason, severity string, ok bool) {
 		return "fingerprint_mismatch", "error", true
 	case hasAny("certificate", " cert ", "x509") && hasFailureWord:
 		return "invalid_certificate", "error", true
-	case hasAny("tls", "handshake") && hasFailureWord:
-		return "handshake_failed", "error", true
 	case hasAny("auth", "authenticate", "authorized key", "authorized_keys", "permission") && hasFailureWord:
 		return "auth_failed", "error", true
+	case hasAny("tls", "handshake") && hasFailureWord:
+		return "handshake_failed", "error", true
 	case hasAny("connect", "connection") && hasFailureWord:
 		return "connection_failed", "error", true
 	case strings.Contains(text, "multiplexing failed") && hasAny("unknown protocol", "failed to read header: eof"):

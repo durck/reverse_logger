@@ -241,6 +241,7 @@ func TestClassifyReverseSSHLogLine(t *testing.T) {
 		{"tls: failed to verify certificate: x509 certificate has expired", "invalid_certificate", "error"},
 		{"websocket handshake failed from 198.51.100.11:443", "handshake_failed", "error"},
 		{"authentication rejected for operator", "auth_failed", "error"},
+		{"ssh: handshake failed: ssh: unable to authenticate, attempted methods [none publickey], no supported methods remain", "auth_failed", "error"},
 		{"Multiplexing failed (unwrapping): initial determination: unknown protocol", "malformed_probe", "info"},
 	}
 	for _, tt := range tests {

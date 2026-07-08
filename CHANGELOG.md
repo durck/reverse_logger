@@ -5,6 +5,8 @@
 - Add failed `reverse_ssh` connection attempt events from journals, with
   central storage, dashboard connection-event panel, Telegram alerts, and a
   `rssh-error-forwarder` systemd service template.
+- Classify `ssh: unable to authenticate` reverse_ssh journal failures as
+  `auth_failed` before generic handshake failures.
 - Keep the dashboard usable when one journal API panel fails by rendering
   successful panels and surfacing the failed endpoint in the status line.
 - Add VPS edge health push-agent monitoring with central health state,
