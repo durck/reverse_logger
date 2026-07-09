@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Add dashboard removal for VPS edge-health nodes while preserving future
+  auto-registration from new health reports.
+- Add a documentation map and full architecture guide covering components,
+  network surfaces, data flows, storage, correlation, and trust boundaries.
 - Render edge-health Telegram alerts with the same compact Rich Message layout
   as session alerts and suppress recovery noise fields.
 - Compact Telegram session alerts with a list-style Rich Message layout and

@@ -1,36 +1,62 @@
 # reverse_ssh Monitoring Stack
 
-Deploy-ready repository for monitoring `reverse_ssh` session events without performing production rollout automatically.
+Deploy-ready monitoring and edge-entrypoint toolkit for `reverse_ssh` session
+events. It does not roll production out automatically; it provides the binaries,
+Docker Compose stack, systemd units, nginx templates, Ansible automation, and
+runbooks needed to deploy deliberately.
 
-It contains:
-
-- `cmd/rssh-logger`: central webhook receiver for `reverse_ssh`.
-- `cmd/rssh-error-forwarder`: journal forwarder for failed `reverse_ssh`
-  connection attempts.
-- `cmd/edge-logger`: optional VPS TCP proxy logger for entrypoint logging.
-- `cmd/edge-health`: VPS health push-agent for VPN, main listener, logger,
-  and local service checks.
-- Docker Compose for main-server services.
-- Embedded read-only `rssh-logger` dashboard for the central SQLite journal,
-  raw ingress events, and failed `reverse_ssh` attempts.
-- Local `reverse_ssh` image build helper that can clone a repository or use a
-  manually prepared checkout.
-- systemd, SoftEther/DNAT, iptables, Ansible, and Telegram proxy examples.
-- nginx WSS/HTTPS VPS entrypoint with Let's Encrypt ACME automation and central ingress correlation.
-- manual deployment and operations documentation.
-
-Start with [docs/manual-deploy.md](docs/manual-deploy.md).
-
-Default deployment target:
+Default WSS/HTTPS topology:
 
 ```text
-client -> VPS:443 -> SoftEther on VPS -> main internal address -> reverse_ssh
+generated client -> VPS nginx :443 -> internal route -> main reverse_ssh :3232
+                                      -> nginx mirror -> central rssh-logger :8080
+reverse_ssh webhook ------------------------------^
 ```
 
 The main server is treated as an internal target and does not need a SoftEther
-interface.
+interface. A VPS accepts the public endpoint, proxies configured transport paths
+to the main `reverse_ssh` listener, and forwards ingress metadata to the central
+logger for correlation.
 
-For HTTPS-looking public entrypoints, see
-[docs/nginx-wss-https-entrypoint.md](docs/nginx-wss-https-entrypoint.md).
-For automated nginx edge rollout on a clean VPS, see
-[deploy/ansible/README.md](deploy/ansible/README.md).
+## Components
+
+| Component | Purpose |
+| --- | --- |
+| `cmd/rssh-logger` | Central webhook, ingress, health, dashboard, SQLite/JSONL, and Telegram alert service. |
+| `cmd/nginx-edge-forwarder` | VPS loopback receiver for nginx mirror metadata with spool-and-flush forwarding. |
+| `cmd/edge-health` | VPS push-agent for main listener, logger, VPN interface, and local service checks. |
+| `cmd/rssh-error-forwarder` | Journal or `docker logs` forwarder for failed `reverse_ssh` connection attempts. |
+| `cmd/edge-logger` | Optional TCP proxy logger for non-nginx fallback paths. |
+| `deploy/nginx/` | Public WSS/HTTPS, download, decoy, and ACME nginx templates. |
+| `deploy/ansible/` | Automated clean-VPS nginx edge rollout and generated client links. |
+| `deploy/terraform/timeweb-edge/` | Optional Timeweb edge provisioning helpers. |
+
+## Documentation
+
+Start with:
+
+- [Documentation map](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [Manual deployment](docs/manual-deploy.md)
+- [Operations](docs/operations.md)
+
+Focused guides:
+
+- [Nginx WSS/HTTPS VPS entrypoint](docs/nginx-wss-https-entrypoint.md)
+- [reverse_ssh webhook](docs/reverse-ssh-webhook.md)
+- [SoftEther/DNAT fallback](docs/softether-entrypoint.md)
+- [Telegram proxy](docs/telegram-proxy.md)
+- [Automated nginx edge rollout](deploy/ansible/README.md)
+
+## Quick Start
+
+```sh
+cp .env.example .env
+docker compose build rssh-logger
+docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
+```
+
+Before using this in a real deployment, fill `.env`, build or provide the
+`reverse_ssh` image, bind the main listener to an internal address, and protect
+the published logger port with firewall rules or SSH tunneling. The full,
+checked sequence is in [docs/manual-deploy.md](docs/manual-deploy.md).

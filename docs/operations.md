@@ -19,6 +19,16 @@ curl -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
   "http://${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}/dashboard/api/edge-health"
 ```
 
+Remove one VPS from the current health monitoring list:
+
+```sh
+curl -X DELETE -H "Authorization: Bearer ${DASHBOARD_TOKEN}" \
+  "http://${LOGGER_BIND_IP:-127.0.0.1}:${LOGGER_BIND_PORT:-8080}/dashboard/api/edge-health?vps_name=<vps_name>"
+```
+
+If that VPS keeps sending `/edge-health` reports, the central logger
+auto-registers it again.
+
 On each VPS:
 
 ```sh
