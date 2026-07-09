@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Pass all `rssh-logger` runtime configuration variables from Compose,
+  including the dashboard active-session cutoff.
 - Add dashboard removal for VPS edge-health nodes while preserving future
   auto-registration from new health reports.
 - Add a documentation map and full architecture guide covering components,

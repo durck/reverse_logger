@@ -1,6 +1,10 @@
 package loggerapp
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -99,6 +103,28 @@ func TestLoadConfigAllowsDisablingDashboardActiveSessionMaxAge(t *testing.T) {
 	}
 }
 
+func TestDockerComposePassesLoggerConfigEnvironment(t *testing.T) {
+	compose := readRepoFile(t, "docker-compose.yml")
+	configSource := readRepoFile(t, "internal", "loggerapp", "config.go")
+
+	for _, name := range loggerConfigEnvNames(configSource) {
+		if !strings.Contains(compose, "      "+name+":") {
+			t.Fatalf("docker-compose.yml does not pass logger config env %s", name)
+		}
+	}
+}
+
+func TestEnvExampleDocumentsComposeVariables(t *testing.T) {
+	compose := readRepoFile(t, "docker-compose.yml") + "\n" + readRepoFile(t, "docker-compose.edge-forward.yml")
+	envExample := readRepoFile(t, ".env.example")
+
+	for _, name := range composeInterpolationNames(compose) {
+		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `=`).MatchString(envExample) {
+			t.Fatalf(".env.example does not document compose variable %s", name)
+		}
+	}
+}
+
 func setMinimalConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
@@ -114,4 +140,46 @@ func setMinimalConfigEnv(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	t.Setenv("WEBHOOK_TOKEN", "webhook-token")
+}
+
+func readRepoFile(t *testing.T, parts ...string) string {
+	t.Helper()
+	path := filepath.Join(append([]string{"..", ".."}, parts...)...)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+func loggerConfigEnvNames(source string) []string {
+	names := map[string]bool{}
+	for _, pattern := range []string{
+		`os\.Getenv\("([A-Z0-9_]+)"\)`,
+		`envOrDefault\("([A-Z0-9_]+)"`,
+	} {
+		matches := regexp.MustCompile(pattern).FindAllStringSubmatch(source, -1)
+		for _, match := range matches {
+			names[match[1]] = true
+		}
+	}
+	return sortedKeys(names)
+}
+
+func composeInterpolationNames(source string) []string {
+	names := map[string]bool{}
+	matches := regexp.MustCompile(`\$\{([A-Z0-9_]+)(?::[-?][^}]*)?\}`).FindAllStringSubmatch(source, -1)
+	for _, match := range matches {
+		names[match[1]] = true
+	}
+	return sortedKeys(names)
+}
+
+func sortedKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
