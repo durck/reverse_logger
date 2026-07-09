@@ -243,8 +243,11 @@ If the Dockerfile is in a custom location, set `REVERSE_SSH_DOCKERFILE` and
 
 ```sh
 cd /opt/reverse-logger
-docker compose build rssh-logger
+docker compose build rssh-logger rssh-session-reconciler
 ```
+
+Both services build the same `reverse-logger/rssh-logger:local` image. Listing
+both keeps targeted sidecar rebuilds from accidentally reusing an older image.
 
 `rssh-logger` runs as the unprivileged `app` user inside its container. The
 host bind mount for `LOGGER_DATA_DIR` must be writable by that container user;

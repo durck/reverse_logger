@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Give `rssh-session-reconciler` its own Compose build context so targeted
+  `up --build rssh-session-reconciler` deploys rebuild the shared logger image.
 - Fix `rssh-session-reconciler` console input line endings so `ls` and `exit`
   are not concatenated by the interactive `reverse_ssh` shell.
 - Fix `rssh-session-reconciler` interactive console polling so blank

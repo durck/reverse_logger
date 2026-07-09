@@ -61,6 +61,8 @@ services:
       - reverse_internal
 
   rssh-session-reconciler:
+    build:
+      context: .
     image: reverse-logger/rssh-logger:local
     container_name: rssh-session-reconciler
     restart: unless-stopped

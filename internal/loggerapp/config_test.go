@@ -150,6 +150,9 @@ func TestDockerComposeKeepsSessionPrivateKeyOutOfLoggerService(t *testing.T) {
 	if !strings.Contains(reconcilerBlock, "RSSH_SESSION_CONSOLE_COMMAND_DELAY:") {
 		t.Fatal("rssh-session-reconciler service must receive RSSH_SESSION_CONSOLE_COMMAND_DELAY")
 	}
+	if !strings.Contains(reconcilerBlock, "build:\n      context: .") {
+		t.Fatal("rssh-session-reconciler service must define build context for targeted --build deploys")
+	}
 }
 
 func setMinimalConfigEnv(t *testing.T) {
