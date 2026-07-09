@@ -55,6 +55,13 @@ func TestParseListOutputRejectsUnclassifiedLines(t *testing.T) {
 	}
 }
 
+func TestParseListOutputRejectsConcatenatedConsoleCommands(t *testing.T) {
+	_, err := ParseListOutput("catcher$ lsexit\n")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
 func TestLiveSessionIDsDedupesAndDropsEmptyIDs(t *testing.T) {
 	ids := LiveSessionIDs([]LiveSession{
 		{ReverseSSHID: " one "},

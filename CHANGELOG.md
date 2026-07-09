@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix `rssh-session-reconciler` console input line endings so `ls` and `exit`
+  are not concatenated by the interactive `reverse_ssh` shell.
 - Fix `rssh-session-reconciler` interactive console polling so blank
   prompt-only output is rejected instead of closing active sessions as
   `live=0`.

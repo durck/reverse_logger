@@ -115,7 +115,7 @@ func RunConsoleCommand(ctx context.Context, config ConsoleConfig, command string
 		_ = session.Close()
 		return output.String(), fmt.Errorf("wait reverse_ssh console prompt: %w", err)
 	}
-	if _, err := io.WriteString(stdin, command+"\n"); err != nil {
+	if err := writeConsoleLine(stdin, command); err != nil {
 		_ = session.Close()
 		return output.String(), fmt.Errorf("write reverse_ssh console command: %w", err)
 	}
@@ -123,7 +123,7 @@ func RunConsoleCommand(ctx context.Context, config ConsoleConfig, command string
 		_ = session.Close()
 		return output.String(), fmt.Errorf("wait reverse_ssh console command output: %w", err)
 	}
-	_, _ = io.WriteString(stdin, "exit\n")
+	_ = writeConsoleLine(stdin, "exit")
 	_ = stdin.Close()
 
 	done := make(chan error, 1)
@@ -297,6 +297,11 @@ func waitConsoleDelay(ctx context.Context, delay time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func writeConsoleLine(w io.Writer, line string) error {
+	_, err := io.WriteString(w, line+"\r")
+	return err
 }
 
 func snapshotEndpoint(rawURL, token string) (string, error) {

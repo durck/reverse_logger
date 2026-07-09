@@ -284,6 +284,8 @@ Dashboard shows stale active sessions:
 3. If manual SSH with `RSSH_SESSION_CONSOLE_KEY_PATH` sees clients but the
    reconciler does not, increase `RSSH_SESSION_CONSOLE_COMMAND_DELAY` from the
    default `1s` and recreate `rssh-session-reconciler`.
+   If logs show `catcher$ lsexit`, deploy a version that sends console
+   commands with carriage-return line endings.
 4. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`.
    Increase it for intentionally long-lived sessions, or set `0s` to keep the
    legacy "active until disconnected" behavior.
