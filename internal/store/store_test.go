@@ -618,6 +618,38 @@ func TestDashboardTimelineSeparatesPeakFromBucketEnd(t *testing.T) {
 	}
 }
 
+func TestDashboardTimelineUsesSnapshotForLiveEnd(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.SetDashboardConfig(DashboardConfig{ActiveSessionMaxAge: 24 * time.Hour})
+
+	until := time.Date(2026, 7, 1, 15, 45, 0, 0, time.UTC)
+	seedDashboardEnrichedForClient(t, st, "active-one", "client-one", "connected", "matched", "wss", "edge-1", "one.host", "198.51.100.30", "203.0.113.10", "edge1.example.com", until.Add(-3*time.Hour))
+	seedDashboardEnrichedForClient(t, st, "active-two", "client-two", "connected", "matched", "wss", "edge-1", "two.host", "198.51.100.31", "203.0.113.10", "edge1.example.com", until.Add(-2*time.Hour))
+	if _, err := st.ReconcileSessionSnapshot([]string{"client-one"}, until.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	timeline, err := st.dashboardTimeline(context.Background(), dashboardTimeBounds{
+		window: 24 * time.Hour,
+		since:  until.Add(-24 * time.Hour).Format(time.RFC3339Nano),
+		until:  until.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := timeline[len(timeline)-1]
+	if last.Active != 2 {
+		t.Fatalf("last bucket peak active = %d, bucket=%+v", last.Active, last)
+	}
+	if last.ActiveEnd != 1 {
+		t.Fatalf("last bucket active end = %d, bucket=%+v", last.ActiveEnd, last)
+	}
+}
+
 func TestDashboardEventsFiltersAndSearches(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

@@ -799,7 +799,87 @@ ORDER BY received_at ASC, id ASC`, bounds.until)
 		timeline[i].Active = peak
 		timeline[i].ActiveEnd = len(active)
 	}
+	return s.applySessionSnapshotTimeline(ctx, bounds, timeline, step, layout)
+}
+
+func (s *Store) applySessionSnapshotTimeline(ctx context.Context, bounds dashboardTimeBounds, timeline []DashboardTimelineBucket, step time.Duration, layout string) error {
+	snapshots, err := s.dashboardSessionSnapshots(ctx, bounds)
+	if err != nil {
+		return err
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+	until, err := time.Parse(time.RFC3339Nano, bounds.until)
+	if err != nil {
+		return err
+	}
+	maxAge := s.dashboard.ActiveSessionMaxAge
+	snapshotIndex := 0
+	latestSnapshot := -1
+	for i := range timeline {
+		bucketStart, err := time.Parse(layout, timeline[i].BucketStart)
+		if err != nil {
+			continue
+		}
+		bucketEnd := bucketStart.Add(step)
+		if bucketEnd.After(until) {
+			bucketEnd = until
+		}
+		for snapshotIndex < len(snapshots) && !snapshots[snapshotIndex].checkedAt.After(bucketEnd) {
+			latestSnapshot = snapshotIndex
+			snapshotIndex++
+		}
+		if latestSnapshot < 0 {
+			continue
+		}
+		snapshot := snapshots[latestSnapshot]
+		if maxAge > 0 && snapshot.checkedAt.Before(bucketEnd.Add(-maxAge)) {
+			continue
+		}
+		timeline[i].ActiveEnd = snapshot.liveCount
+	}
 	return nil
+}
+
+func (s *Store) dashboardSessionSnapshots(ctx context.Context, bounds dashboardTimeBounds) ([]dashboardSessionSnapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH seed AS (
+	SELECT checked_at, live_count
+	FROM session_snapshots
+	WHERE checked_at < ?
+	ORDER BY checked_at DESC, id DESC
+	LIMIT 1
+),
+windowed AS (
+	SELECT checked_at, live_count
+	FROM session_snapshots
+	WHERE checked_at >= ? AND checked_at <= ?
+)
+SELECT checked_at, live_count FROM seed
+UNION ALL
+SELECT checked_at, live_count FROM windowed
+ORDER BY checked_at ASC`, bounds.since, bounds.since, bounds.until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	snapshots := make([]dashboardSessionSnapshot, 0)
+	for rows.Next() {
+		var checkedAt string
+		var snapshot dashboardSessionSnapshot
+		if err := rows.Scan(&checkedAt, &snapshot.liveCount); err != nil {
+			return nil, err
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, checkedAt)
+		if err != nil {
+			continue
+		}
+		snapshot.checkedAt = parsed.UTC()
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots, rows.Err()
 }
 
 func applyDashboardSessionState(active map[string]time.Time, event dashboardSessionStateEvent, maxAge time.Duration) {
@@ -826,6 +906,11 @@ type dashboardSessionStateEvent struct {
 	reverseSSHID string
 	status       string
 	receivedAt   time.Time
+}
+
+type dashboardSessionSnapshot struct {
+	checkedAt time.Time
+	liveCount int
 }
 
 func truncateDashboardBucket(value time.Time, step time.Duration) time.Time {
