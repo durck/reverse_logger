@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Refresh architecture documentation for the session snapshot reconciler,
+  `/session-snapshots`, active-session and timeline source-of-truth rules, and
+  storage schema.
 - Store reconciler results as session snapshots and use fresh snapshots as the
   `Active sessions` source of truth instead of creating synthetic disconnect
   lifecycle events.

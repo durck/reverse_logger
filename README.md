@@ -11,6 +11,7 @@ Default WSS/HTTPS topology:
 generated client -> VPS nginx :443 -> internal route -> main reverse_ssh :3232
                                       -> nginx mirror -> central rssh-logger :8080
 reverse_ssh webhook ------------------------------^
+rssh-session-reconciler -> reverse_ssh console -> session snapshots --------^
 ```
 
 The main server is treated as an internal target and does not need a SoftEther
@@ -23,6 +24,7 @@ logger for correlation.
 | Component | Purpose |
 | --- | --- |
 | `cmd/rssh-logger` | Central webhook, ingress, health, dashboard, SQLite/JSONL, and Telegram alert service. |
+| `cmd/rssh-session-reconciler` | Docker sidecar that polls `reverse_ssh ls` and posts live session snapshots for accurate dashboard active sessions. |
 | `cmd/nginx-edge-forwarder` | VPS loopback receiver for nginx mirror metadata with spool-and-flush forwarding. |
 | `cmd/edge-health` | VPS push-agent for main listener, logger, VPN interface, and local service checks. |
 | `cmd/rssh-error-forwarder` | Journal or `docker logs` forwarder for failed `reverse_ssh` connection attempts. |
@@ -52,11 +54,12 @@ Focused guides:
 
 ```sh
 cp .env.example .env
-docker compose build rssh-logger
+docker compose build rssh-logger rssh-session-reconciler
 docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
 ```
 
 Before using this in a real deployment, fill `.env`, build or provide the
-`reverse_ssh` image, bind the main listener to an internal address, and protect
-the published logger port with firewall rules or SSH tunneling. The full,
-checked sequence is in [docs/manual-deploy.md](docs/manual-deploy.md).
+`reverse_ssh` image, create the reconciler console key referenced by
+`RSSH_SESSION_CONSOLE_KEY_PATH`, bind the main listener to an internal address,
+and protect the published logger port with firewall rules or SSH tunneling. The
+full, checked sequence is in [docs/manual-deploy.md](docs/manual-deploy.md).

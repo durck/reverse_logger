@@ -24,7 +24,8 @@ step-by-step runbooks in `docs/manual-deploy.md` and `docs/operations.md`.
 `reverse_logger` is an observability and deployment helper around an external
 `reverse_ssh` listener. It does not implement the reverse shell transport
 itself. It records lifecycle webhooks from `reverse_ssh`, captures VPS ingress
-metadata, enriches sessions with real client IP data when possible, exposes a
+metadata, reconciles live active sessions through the internal `reverse_ssh`
+console, enriches sessions with real client IP data when possible, exposes a
 read-only dashboard, and sends optional Telegram alerts.
 
 The production host inventory, real domains, real IPs, credentials, VPN peer
@@ -39,9 +40,9 @@ The normal deployment has two planes:
 - Data plane: generated `reverse_ssh` clients reach the VPS public HTTPS
   endpoint, then nginx proxies only the configured WSS or HTTPS polling paths to
   the internal main-server `reverse_ssh` listener.
-- Observability plane: `reverse_ssh`, nginx edge helpers, health agents, and
-  optional journal forwarders POST token-protected events to the central
-  `rssh-logger`.
+- Observability plane: `reverse_ssh`, the session reconciler, nginx edge
+  helpers, health agents, and optional journal forwarders POST token-protected
+  events to the central `rssh-logger`.
 
 ```mermaid
 flowchart LR
@@ -52,6 +53,7 @@ flowchart LR
     Forwarder["nginx-edge-forwarder\n127.0.0.1:18080\nspool + flush"]
     VPN["SoftEther or internal route"]
     RSSH["main reverse_ssh\nhost REVERSE_SSH_BIND_IP:3232\ncontainer :2222"]
+    Reconciler["rssh-session-reconciler\ninternal console ls\nsession snapshots"]
     Logger["rssh-logger :8080\nwebhooks, ingress, health,\ndashboard API"]
     Store["SQLite WAL + JSONL\nLOGGER_DATA_DIR"]
     Dashboard["Read-only dashboard\n/dashboard/*"]
@@ -64,6 +66,8 @@ flowchart LR
     Nginx -->|"nginx mirror metadata"| Forwarder
     Forwarder -->|"POST /ingress-events"| Logger
     RSSH -->|"POST /hooks"| Logger
+    Reconciler -->|"SSH console ls"| RSSH
+    Reconciler -->|"POST /session-snapshots"| Logger
     Logger --> Store
     Dashboard -->|"GET /dashboard/api/*"| Logger
     Logger -->|"alerts"| Telegram
@@ -79,7 +83,8 @@ SoftEther or private routing path.
 | Component | Location | Executable or service | Role | Persistent state |
 | --- | --- | --- | --- | --- |
 | `reverse_ssh` | main server, Docker | external image from `REVERSE_SSH_IMAGE` | Accepts client callbacks and operator console sessions. Emits lifecycle webhooks to `rssh-logger`. | `REVERSE_SSH_DATA_DIR` |
-| `rssh-logger` | main server, Docker | `cmd/rssh-logger` | Central HTTP receiver, SQLite/JSONL writer, correlation engine, dashboard API, edge-health evaluator, Telegram alert producer. | `LOGGER_DATA_DIR` |
+| `rssh-logger` | main server, Docker | `cmd/rssh-logger` | Central HTTP receiver, SQLite/JSONL writer, correlation engine, session snapshot receiver, dashboard API, edge-health evaluator, Telegram alert producer. | `LOGGER_DATA_DIR` |
+| `rssh-session-reconciler` | main server, Docker sidecar | `cmd/rssh-session-reconciler` | Polls the internal `reverse_ssh` console with `ls`, parses live client IDs, and posts active-session snapshots to `rssh-logger`. | Docker volume `rssh_session_reconciler_state` for known hosts |
 | nginx edge | each VPS | nginx config from `deploy/nginx/` or Ansible template | Public TLS endpoint on `443/tcp`; routes only configured WSS/HTTPS polling/download paths to main `reverse_ssh`; mirrors ingress metadata locally. | nginx logs |
 | `nginx-edge-forwarder` | each VPS | `cmd/nginx-edge-forwarder` | Receives nginx mirror subrequests on loopback, normalizes selected ingress events, spools them, and forwards them to main `/ingress-events`. | `/var/lib/reverse-logger/nginx-edge-spool` |
 | `edge-health` | each VPS | `cmd/edge-health` | Periodically checks main `reverse_ssh`, logger health, optional VPN interface, and optional systemd services; POSTs health reports to main. | none beyond systemd logs |
@@ -102,6 +107,8 @@ flowchart TD
     D -->|"spool *.json"| E["VPS spool dir"]
     E -->|"POST http://main:8080/ingress-events/<token>"| F["rssh-logger"]
     C -->|"POST http://rssh-logger:8080/hooks/<token>"| F
+    H["rssh-session-reconciler"] -->|"SSH reverse_ssh:2222 ls"| C
+    H -->|"POST http://rssh-logger:8080/session-snapshots/<token>"| F
     F -->|"correlate and store"| G["events.db + JSONL"]
 ```
 
@@ -141,6 +148,7 @@ the normal nginx WSS/HTTPS path.
 | Public HTTPS/WSS | VPS nginx | `0.0.0.0:443` | yes | `reverse_ssh` transport auth inside the proxied payload | generated clients |
 | HTTP ACME bootstrap | VPS nginx | `0.0.0.0:80` | yes during HTTP-01 | none for ACME challenge path | Let's Encrypt HTTP-01 |
 | Main `reverse_ssh` listener | main host Docker port publish | `REVERSE_SSH_BIND_IP:REVERSE_SSH_BIND_PORT` to container `:2222` | no | `reverse_ssh` operator/client auth | VPS nginx, operator console |
+| Internal `reverse_ssh` console | Docker network | `reverse_ssh:2222` | no | reconciler SSH private key and known-host check | `rssh-session-reconciler` |
 | Central logger | main host Docker port publish | `LOGGER_BIND_IP:LOGGER_BIND_PORT` to container `:8080` | no | path token or dashboard auth depending on endpoint | VPS forwarders, health agents, operators |
 | Compose-internal logger | Docker network | `rssh-logger:8080` | no | path token for hooks | `reverse_ssh` container |
 | Nginx mirror capture | VPS loopback | `127.0.0.1:18080` | no | loopback-only nginx internal caller | nginx `mirror` subrequest |
@@ -159,6 +167,7 @@ All write endpoints reject missing or empty tokens. Token mismatches return
 | --- | --- | --- | --- | --- |
 | `/healthz` | `GET` | none | health checks | no event state |
 | `/hooks/<WEBHOOK_TOKEN>` | `POST` | path token | `reverse_ssh` webhook | `events`, `enriched_events`, `events.jsonl`, `enriched_events.jsonl` |
+| `/session-snapshots/<RSSH_SESSION_FORWARD_TOKEN>` | `POST` | path token or `Authorization: Bearer` | `rssh-session-reconciler` | `session_snapshots`, `session_snapshot_live_ids` |
 | `/ingress-events/<EDGE_FORWARD_TOKEN>` | `POST` | path token | `nginx-edge-forwarder` | `ingress_events`, `ingress_events.jsonl`, reconciliation updates |
 | `/edge-events/<EDGE_FORWARD_TOKEN>` | `POST` | path token | optional `edge-logger` | `edge_events`, `edge_events.jsonl` |
 | `/reverse-ssh-errors/<EDGE_FORWARD_TOKEN>` | `POST` | path token | `rssh-error-forwarder` | `reverse_ssh_errors`, `reverse_ssh_errors.jsonl` |
@@ -270,6 +279,36 @@ sequenceDiagram
 `HostName` is split once at the first dot. For `alice.workstation.lab`,
 `user_name=alice` and `computer_name=workstation.lab`.
 
+### Live Session Snapshot Reconciliation
+
+```mermaid
+sequenceDiagram
+    participant Reconciler as rssh-session-reconciler
+    participant RSSH as reverse_ssh console
+    participant Logger as rssh-logger
+    participant Store as Store
+    participant Dashboard as Dashboard
+
+    Reconciler->>Logger: GET /healthz and wait for 200
+    Reconciler->>RSSH: SSH to reverse_ssh:2222 with reconciler key
+    Reconciler->>RSSH: send ls, wait for parseable output
+    RSSH-->>Reconciler: live client rows or No RSSH clients connected
+    Reconciler->>Logger: POST /session-snapshots/<RSSH_SESSION_FORWARD_TOKEN>
+    Logger->>Store: insert session_snapshots row
+    Logger->>Store: insert session_snapshot_live_ids rows
+    Dashboard->>Logger: GET /dashboard/api/overview
+    Logger->>Store: read latest fresh snapshot for active sessions
+```
+
+The reconciler stores snapshots instead of writing synthetic disconnect events.
+Webhook rows remain the append-only lifecycle audit trail. When a fresh snapshot
+exists, the dashboard uses its live IDs as the `Active sessions` source of
+truth and joins those IDs back to the latest non-reconciler enriched metadata.
+The dashboard timeline still calculates each bucket's `Active` peak from
+lifecycle events, then applies the latest fresh snapshot at the bucket end to
+set `ActiveEnd` to the reconciled live count. If no fresh snapshot is available,
+the dashboard falls back to webhook connect/disconnect state.
+
 ### Nginx Ingress Forwarding
 
 ```mermaid
@@ -360,7 +399,11 @@ flowchart LR
 ```
 
 Dashboard pages are embedded in the `rssh-logger` binary and are available only
-when `DASHBOARD_TOKEN` is non-empty.
+when `DASHBOARD_TOKEN` is non-empty. `Recent sessions` is read from
+`enriched_events`; `Active sessions` prefers the latest fresh
+`session_snapshots` row and falls back to lifecycle webhooks when no fresh
+snapshot exists. Timeline buckets expose both a lifecycle-derived active peak
+and an end-of-bucket active value; fresh snapshots override only the end value.
 
 ## Correlation Model
 
@@ -369,6 +412,9 @@ The central logger maintains two raw sources and one enriched view:
 - `events`: webhook lifecycle events from `reverse_ssh`.
 - `ingress_events`: request-start metadata from VPS nginx.
 - `enriched_events`: best-effort join of a webhook event to one ingress event.
+
+Session snapshots are a separate active-state source. They do not participate in
+ingress correlation and do not mutate webhook lifecycle rows.
 
 ```mermaid
 flowchart TD
@@ -427,12 +473,17 @@ erDiagram
     ingress_events ||--o{ enriched_events : "ingress_event_hash"
     events ||--o{ telegram_deliveries : "event_hash"
     reverse_ssh_errors ||--o{ reverse_ssh_error_telegram_deliveries : "event_hash"
+    session_snapshots ||--o{ session_snapshot_live_ids : "snapshot_id"
+    enriched_events ||--o{ session_snapshot_live_ids : "reverse_ssh_id metadata"
     edge_health_expected ||--o| edge_health_state : "vps_name"
     edge_health_expected ||--o{ edge_health_reports : "vps_name"
 
     events {
         integer id
         text event_hash
+        text ingest_source
+        text ingest_reason
+        integer synthetic
         text status
         text reverse_ssh_id
         text host_name
@@ -461,6 +512,9 @@ erDiagram
         text event_hash
         text source_event_hash
         text ingress_event_hash
+        text ingest_source
+        text ingest_reason
+        integer synthetic
         text correlation_status
         text correlation_method
         text real_client_ip
@@ -476,6 +530,18 @@ erDiagram
         text message
         text remote_addr
         text observed_at
+    }
+
+    session_snapshots {
+        integer id
+        text checked_at
+        text received_at
+        integer live_count
+    }
+
+    session_snapshot_live_ids {
+        integer snapshot_id
+        text reverse_ssh_id
     }
 
     edge_health_expected {
@@ -514,12 +580,16 @@ Central durable files under `LOGGER_DATA_DIR`:
 | `reverse_ssh_errors.jsonl` | classified failed attempt events |
 | `edge_events.jsonl` | optional TCP edge-logger events |
 
+Session snapshots are SQLite-only. They update dashboard active-state reads but
+do not append JSONL lifecycle events.
+
 VPS durable or diagnostic files:
 
 | File | Purpose |
 | --- | --- |
 | `/var/lib/reverse-logger/nginx-edge-spool/*.json` | unsent ingress events |
 | `/var/lib/reverse-logger/nginx-edge-spool/nginx-edge.offset` | tail-mode log offset |
+| `rssh_session_reconciler_state:/state/known_hosts` | Docker volume state for reconciler host-key trust |
 | `/var/log/nginx/reverse_ssh_ingress.json` | local nginx diagnostic access log |
 | `/var/log/nginx/reverse_ssh_decoy.log` | decoy-path diagnostics |
 
@@ -547,6 +617,7 @@ trailing slash.
 | Token | Used by | Protects |
 | --- | --- | --- |
 | `WEBHOOK_TOKEN` | `reverse_ssh` webhook registration | `/hooks` |
+| `RSSH_SESSION_FORWARD_TOKEN` | `rssh-session-reconciler` and `rssh-logger` | `/session-snapshots` |
 | `EDGE_FORWARD_TOKEN` | `nginx-edge-forwarder`, optional `edge-logger`, `rssh-error-forwarder` | `/ingress-events`, `/edge-events`, `/reverse-ssh-errors`, `/edge/source-ip` |
 | `EDGE_HEALTH_TOKEN` | `edge-health` and expected-node registration | `/edge-health`, `/edge-health/expected` |
 | `DASHBOARD_TOKEN` | browser/API clients | `/dashboard` and `/dashboard/api/*` |
@@ -565,7 +636,10 @@ private runtime store. Do not commit real tokens.
 | `CORRELATION_INGRESS_RECONCILE_AFTER` | `60s` | How far after ingress arrival to search webhooks |
 | `CORRELATION_CLIENT_IP_FALLBACK_ENABLED` | `true` | Allows trusted-proxy client IP fallback |
 | `CORRELATION_UNIQUE_TIME_FALLBACK_ENABLED` | `true` | Allows unique time-window fallback |
-| `DASHBOARD_ACTIVE_SESSION_MAX_AGE` | `1h` | Hides stale active sessions with missing disconnects |
+| `RSSH_SESSION_INTERVAL` | `30s` | How often the sidecar polls `reverse_ssh ls` |
+| `RSSH_SESSION_TIMEOUT` | `10s` | Per-iteration logger wait, console fetch, and snapshot post timeout |
+| `RSSH_SESSION_CONSOLE_COMMAND_DELAY` | `1s` | Initial wait before sending `ls` to the interactive console |
+| `DASHBOARD_ACTIVE_SESSION_MAX_AGE` | `1h` | Freshness cutoff for session snapshots and stale fallback webhook sessions |
 | `EDGE_HEALTH_DEFAULT_INTERVAL` | `30s` | Default expected report interval on central evaluation |
 | `EDGE_HEALTH_MISSED_REPORTS` | `3` | Missed reports before a node becomes `down` |
 | `EDGE_HEALTH_BOOTSTRAP_GRACE` | `2m` | Initial `unknown` grace for expected nodes |
@@ -590,6 +664,7 @@ flowchart TB
 
     subgraph MainPrivate["Main private trust zone"]
         RSSH["reverse_ssh"]
+        Reconciler["rssh-session-reconciler"]
         Logger["rssh-logger"]
         DB["LOGGER_DATA_DIR"]
     end
@@ -604,6 +679,8 @@ flowchart TB
     Forwarder --> Logger
     Health --> Logger
     RSSH --> Logger
+    Reconciler --> RSSH
+    Reconciler --> Logger
     Logger --> DB
     Logger --> TG
 ```
@@ -622,6 +699,9 @@ Security invariants:
   trusted VPS nginx sources.
 - `DASHBOARD_TOKEN` enables a read-only dashboard, but it is still sensitive
   because it exposes connection metadata.
+- The reconciler private key is mounted read-only from
+  `RSSH_SESSION_CONSOLE_KEY_PATH`. It should authorize only the internal
+  console access needed for `ls`.
 - `EDGE_FORWARD_TOKEN` and `EDGE_HEALTH_TOKEN` should be separate so ingress
   forwarding and health reporting can be rotated independently.
 - Real hostnames, IP allocations, VPN topology, DNAT state, and generated random

@@ -277,25 +277,29 @@ Dashboard shows stale active sessions:
 
 1. When `rssh-session-reconciler` is running, `Active sessions` is derived from
    the latest fresh `reverse_ssh ls` snapshot. Webhook rows remain an append-only
-   audit trail and are used only for metadata and fallback.
+   audit trail and are used for metadata, timeline peaks, and fallback.
 2. Without a fresh snapshot, the dashboard falls back to real `reverse_ssh`
    connect/disconnect webhooks. If a disconnect webhook is never delivered, the
    session is treated as active until it becomes stale.
-3. If `rssh-session-reconciler` is enabled, check its logs. A valid empty
+3. In the activity timeline, bucket peak (`Active`) still comes from lifecycle
+   events, while bucket end (`ActiveEnd`) is corrected by the latest fresh
+   snapshot. A bucket can therefore show a higher peak than its final live
+   count.
+4. If `rssh-session-reconciler` is enabled, check its logs. A valid empty
    snapshot requires the console to return `No RSSH clients connected`; blank
    or prompt-only output is rejected and must not change active sessions.
-4. If manual SSH with `RSSH_SESSION_CONSOLE_KEY_PATH` sees clients but the
+5. If manual SSH with `RSSH_SESSION_CONSOLE_KEY_PATH` sees clients but the
    reconciler does not, first deploy a version that waits for parseable `ls`
    output before closing the console. If empty snapshots continue, increase
    `RSSH_SESSION_TIMEOUT` so the console has longer to return output.
    If logs show `catcher$ lsexit`, deploy a version that sends console
    commands with carriage-return line endings, rebuild the shared image, and
    force-recreate `rssh-session-reconciler`.
-5. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`. It also
+6. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`. It also
    defines how old a snapshot may be before the dashboard falls back to webhook
    lifecycle state. Increase it for intentionally long-lived fallback sessions,
    or set `0s` to keep the latest snapshot/fallback state indefinitely.
-6. Recreate `rssh-logger` after changing this value.
+7. Recreate `rssh-logger` after changing this value.
 
 No Telegram alert:
 
