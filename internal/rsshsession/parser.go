@@ -25,8 +25,13 @@ func ParseListOutput(output string) ([]LiveSession, error) {
 	lines := strings.Split(output, "\n")
 	sessions := make([]LiveSession, 0)
 	var unclassified []string
+	sawEmptyListing := false
 	for _, line := range lines {
 		line = normalizeConsoleLine(line)
+		if isEmptyListingLine(line) {
+			sawEmptyListing = true
+			continue
+		}
 		if shouldIgnoreConsoleLine(line) {
 			continue
 		}
@@ -46,6 +51,9 @@ func ParseListOutput(output string) ([]LiveSession, error) {
 	}
 	if len(unclassified) > 0 {
 		return nil, errors.New("unrecognized reverse_ssh ls output line: " + unclassified[0])
+	}
+	if len(sessions) == 0 && !sawEmptyListing {
+		return nil, errors.New("empty reverse_ssh ls output")
 	}
 	return sessions, nil
 }
@@ -82,8 +90,9 @@ func shouldIgnoreConsoleLine(line string) bool {
 	if strings.Contains(lower, "unknown command:") {
 		return true
 	}
-	if strings.Contains(lower, "no rssh clients connected") {
-		return true
-	}
 	return false
+}
+
+func isEmptyListingLine(line string) bool {
+	return strings.Contains(strings.ToLower(line), "no rssh clients connected")
 }

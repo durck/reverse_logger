@@ -37,6 +37,17 @@ func TestParseListOutputIgnoresConsoleNoiseAndEmptyListing(t *testing.T) {
 	}
 }
 
+func TestParseListOutputRejectsEmptyOrPromptOnlyOutput(t *testing.T) {
+	for _, output := range []string{
+		"",
+		"catcher$ ls\ncatcher$ exit\n",
+	} {
+		if _, err := ParseListOutput(output); err == nil {
+			t.Fatalf("expected parse error for output %q", output)
+		}
+	}
+}
+
 func TestParseListOutputRejectsUnclassifiedLines(t *testing.T) {
 	_, err := ParseListOutput("this is not a reverse_ssh listing\n")
 	if err == nil {

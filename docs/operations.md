@@ -278,10 +278,16 @@ Dashboard shows stale active sessions:
 1. `Active sessions` is derived from `reverse_ssh` connect/disconnect
    webhooks. If a disconnect webhook is never delivered, the session is treated
    as active until it becomes stale.
-2. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`.
+2. If `rssh-session-reconciler` is enabled, check its logs. A valid empty
+   snapshot requires the console to return `No RSSH clients connected`; blank
+   or prompt-only output is rejected and must not close sessions.
+3. If manual SSH with `RSSH_SESSION_CONSOLE_KEY_PATH` sees clients but the
+   reconciler does not, increase `RSSH_SESSION_CONSOLE_COMMAND_DELAY` from the
+   default `1s` and recreate `rssh-session-reconciler`.
+4. The default stale cutoff is `DASHBOARD_ACTIVE_SESSION_MAX_AGE=1h`.
    Increase it for intentionally long-lived sessions, or set `0s` to keep the
    legacy "active until disconnected" behavior.
-3. Recreate `rssh-logger` after changing this value.
+5. Recreate `rssh-logger` after changing this value.
 
 No Telegram alert:
 

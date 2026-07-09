@@ -183,6 +183,9 @@ Set at minimum:
   normally `/opt/reverse-logger/secrets/rssh_session_reconciler`.
 - `RSSH_SESSION_INTERVAL` / `RSSH_SESSION_TIMEOUT`: reconciler poll interval
   and per-iteration timeout.
+- `RSSH_SESSION_CONSOLE_COMMAND_DELAY`: delay around interactive
+  `reverse_ssh` console commands. Keep the default `1s` unless the reconciler
+  logs empty console output while manual SSH with the same key works.
 - `EDGE_HEALTH_TOKEN`: token used by VPS health reporters. Keep it separate
   from `EDGE_FORWARD_TOKEN` so ingress forwarding and health reporting can be
   rotated independently.

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Fix `rssh-session-reconciler` interactive console polling so blank
+  prompt-only output is rejected instead of closing active sessions as
+  `live=0`.
 - Add a Docker-managed `rssh-session-reconciler` sidecar that checks
   `reverse_ssh ls` and closes ghost active sessions with marked synthetic
   disconnect events.

@@ -79,6 +79,7 @@ func loadConfig() (config, error) {
 			PrivateKeyPath: strings.TrimSpace(os.Getenv("RSSH_SESSION_CONSOLE_KEY_PATH")),
 			KnownHostsPath: envOrDefault("RSSH_SESSION_KNOWN_HOSTS_PATH", "/state/known_hosts"),
 			Timeout:        timeout,
+			CommandDelay:   parseDurationEnv("RSSH_SESSION_CONSOLE_COMMAND_DELAY", time.Second),
 		},
 		ForwardURL: envOrDefault("RSSH_SESSION_FORWARD_URL", "http://rssh-logger:8080/session-snapshots"),
 		Token:      strings.TrimSpace(os.Getenv("RSSH_SESSION_FORWARD_TOKEN")),

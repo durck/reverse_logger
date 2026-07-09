@@ -27,6 +27,7 @@ type ConsoleConfig struct {
 	PrivateKeyPath string
 	KnownHostsPath string
 	Timeout        time.Duration
+	CommandDelay   time.Duration
 }
 
 type SnapshotClient struct {
@@ -110,7 +111,19 @@ func RunConsoleCommand(ctx context.Context, config ConsoleConfig, command string
 	if command == "" {
 		command = "ls"
 	}
-	_, _ = io.WriteString(stdin, command+"\nexit\n")
+	if err := waitConsoleDelay(ctx, config.CommandDelay); err != nil {
+		_ = session.Close()
+		return output.String(), fmt.Errorf("wait reverse_ssh console prompt: %w", err)
+	}
+	if _, err := io.WriteString(stdin, command+"\n"); err != nil {
+		_ = session.Close()
+		return output.String(), fmt.Errorf("write reverse_ssh console command: %w", err)
+	}
+	if err := waitConsoleDelay(ctx, config.CommandDelay); err != nil {
+		_ = session.Close()
+		return output.String(), fmt.Errorf("wait reverse_ssh console command output: %w", err)
+	}
+	_, _ = io.WriteString(stdin, "exit\n")
 	_ = stdin.Close()
 
 	done := make(chan error, 1)
@@ -214,6 +227,9 @@ func normalizeConsoleConfig(config ConsoleConfig) ConsoleConfig {
 	if config.Timeout <= 0 {
 		config.Timeout = 10 * time.Second
 	}
+	if config.CommandDelay <= 0 {
+		config.CommandDelay = time.Second
+	}
 	return config
 }
 
@@ -267,6 +283,20 @@ func knownHostPattern(host string, port int) string {
 		return host
 	}
 	return "[" + host + "]:" + strconv.Itoa(port)
+}
+
+func waitConsoleDelay(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func snapshotEndpoint(rawURL, token string) (string, error) {
