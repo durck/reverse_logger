@@ -282,8 +282,9 @@ Dashboard shows stale active sessions:
    snapshot requires the console to return `No RSSH clients connected`; blank
    or prompt-only output is rejected and must not close sessions.
 3. If manual SSH with `RSSH_SESSION_CONSOLE_KEY_PATH` sees clients but the
-   reconciler does not, increase `RSSH_SESSION_CONSOLE_COMMAND_DELAY` from the
-   default `1s` and recreate `rssh-session-reconciler`.
+   reconciler does not, first deploy a version that waits for parseable `ls`
+   output before closing the console. If empty snapshots continue, increase
+   `RSSH_SESSION_TIMEOUT` so the console has longer to return output.
    If logs show `catcher$ lsexit`, deploy a version that sends console
    commands with carriage-return line endings, rebuild the shared image, and
    force-recreate `rssh-session-reconciler`.

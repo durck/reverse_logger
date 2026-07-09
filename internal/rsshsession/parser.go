@@ -16,6 +16,8 @@ type LiveSession struct {
 }
 
 var (
+	ErrEmptyListOutput = errors.New("empty reverse_ssh ls output")
+
 	ansiPattern       = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 	listLinePattern   = regexp.MustCompile(`^(\S+)\s+(\S+)\s+(\S+)\s+(\S+),\s+owners:\s+(.+?),\s+version:\s+(.+)$`)
 	consolePromptLike = regexp.MustCompile(`^[A-Za-z0-9_.@-]+\$\s*(ls|exit)?\s*$`)
@@ -53,7 +55,7 @@ func ParseListOutput(output string) ([]LiveSession, error) {
 		return nil, errors.New("unrecognized reverse_ssh ls output line: " + unclassified[0])
 	}
 	if len(sessions) == 0 && !sawEmptyListing {
-		return nil, errors.New("empty reverse_ssh ls output")
+		return nil, ErrEmptyListOutput
 	}
 	return sessions, nil
 }

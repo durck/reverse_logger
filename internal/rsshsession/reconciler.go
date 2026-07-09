@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -93,7 +94,7 @@ func RunConsoleCommand(ctx context.Context, config ConsoleConfig, command string
 	}
 	defer session.Close()
 
-	var output bytes.Buffer
+	var output lockedBuffer
 	session.Stdout = &output
 	session.Stderr = &output
 	stdin, err := session.StdinPipe()
@@ -119,7 +120,7 @@ func RunConsoleCommand(ctx context.Context, config ConsoleConfig, command string
 		_ = session.Close()
 		return output.String(), fmt.Errorf("write reverse_ssh console command: %w", err)
 	}
-	if err := waitConsoleDelay(ctx, config.CommandDelay); err != nil {
+	if err := waitForListOutput(ctx, &output); err != nil {
 		_ = session.Close()
 		return output.String(), fmt.Errorf("wait reverse_ssh console command output: %w", err)
 	}
@@ -299,9 +300,47 @@ func waitConsoleDelay(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+func waitForListOutput(ctx context.Context, output interface{ String() string }) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		if _, err := ParseListOutput(output.String()); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		}
+	}
+}
+
 func writeConsoleLine(w io.Writer, line string) error {
 	_, err := io.WriteString(w, line+"\r")
 	return err
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func snapshotEndpoint(rawURL, token string) (string, error) {

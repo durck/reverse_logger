@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Make `rssh-session-reconciler` wait for parseable `reverse_ssh ls` output
+  before closing the console, reducing intermittent empty snapshot attempts.
 - Give `rssh-session-reconciler` its own Compose build context so targeted
   `up --build rssh-session-reconciler` deploys rebuild the shared logger image.
 - Fix `rssh-session-reconciler` console input line endings so `ls` and `exit`

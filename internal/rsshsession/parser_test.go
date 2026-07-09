@@ -1,6 +1,9 @@
 package rsshsession
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseListOutputParsesReverseSSHLine(t *testing.T) {
 	output := `catcher$ ls
@@ -42,8 +45,8 @@ func TestParseListOutputRejectsEmptyOrPromptOnlyOutput(t *testing.T) {
 		"",
 		"catcher$ ls\ncatcher$ exit\n",
 	} {
-		if _, err := ParseListOutput(output); err == nil {
-			t.Fatalf("expected parse error for output %q", output)
+		if _, err := ParseListOutput(output); !errors.Is(err, ErrEmptyListOutput) {
+			t.Fatalf("expected empty output error for output %q, got %v", output, err)
 		}
 	}
 }
