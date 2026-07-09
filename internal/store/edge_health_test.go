@@ -131,6 +131,53 @@ func TestEdgeHealthOverviewCountsExpectedUnknownAndDown(t *testing.T) {
 	}
 }
 
+func TestDeleteEdgeHealthNodeRemovesMonitoringStateAndAllowsAutoRegister(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	base := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	if _, _, err := st.RecordEdgeHealthReport(edgeHealthReport(edgehealth.StatusOK, base), []byte(`{}`), base); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := st.DeleteEdgeHealthNode(" vps-1 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("expected vps-1 to be deleted")
+	}
+	overview, err := st.EdgeHealthOverview(context.Background(), base, 30*time.Second, 3, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Summary.Total != 0 || len(overview.Nodes) != 0 {
+		t.Fatalf("deleted node is still monitored: %+v", overview)
+	}
+
+	deleted, err = st.DeleteEdgeHealthNode("vps-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted {
+		t.Fatal("second delete should report not found")
+	}
+
+	if _, _, err := st.RecordEdgeHealthReport(edgeHealthReport(edgehealth.StatusOK, base.Add(time.Minute)), []byte(`{}`), base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	overview, err = st.EdgeHealthOverview(context.Background(), base.Add(time.Minute), 30*time.Second, 3, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Summary.Total != 1 || overview.Summary.OK != 1 || overview.Nodes[0].VPSName != "vps-1" {
+		t.Fatalf("new report did not auto-register deleted node: %+v", overview)
+	}
+}
+
 func edgeHealthReport(status string, checkedAt time.Time, checks ...edgehealth.Check) edgehealth.Report {
 	return edgehealth.Report{
 		VPSName:         "vps-1",

@@ -156,6 +156,37 @@ ON CONFLICT(vps_name) DO UPDATE SET
 	return tx.Commit()
 }
 
+func (s *Store) DeleteEdgeHealthNode(vpsName string) (bool, error) {
+	vpsName = strings.TrimSpace(vpsName)
+	if vpsName == "" {
+		return false, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	deleted := false
+	for _, table := range []string{"edge_health_expected", "edge_health_state"} {
+		res, err := tx.Exec(`DELETE FROM `+table+` WHERE vps_name = ?`, vpsName)
+		if err != nil {
+			return false, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if affected > 0 {
+			deleted = true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
 func (s *Store) RecordEdgeHealthReport(report edgehealth.Report, raw []byte, receivedAt time.Time) (EdgeHealthTransition, bool, error) {
 	receivedAt = receivedAt.UTC()
 	report, err := edgehealth.NormalizeReport(report, receivedAt)

@@ -120,6 +120,48 @@ func TestEdgeHealthExpectedEndpointAcceptsBearerTokenWithoutTrailingSlash(t *tes
 	}
 }
 
+func TestDashboardEdgeHealthDeleteRemovesNode(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	server := newHealthTestServer(t, st, telegram.Config{})
+
+	req := httptest.NewRequest(http.MethodPost, "/edge-health/health-secret", strings.NewReader(edgeHealthReportJSON(edgehealth.StatusOK)))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("health status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/dashboard/api/edge-health?vps_name=vps-1", nil)
+	req.SetBasicAuth("operator", "dash-secret")
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"deleted":true`) {
+		t.Fatalf("delete response missing deleted=true: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/dashboard/api/edge-health", nil)
+	req.Header.Set("Authorization", "Bearer dash-secret")
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dashboard status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var overview store.EdgeHealthOverview
+	if err := json.NewDecoder(rec.Body).Decode(&overview); err != nil {
+		t.Fatal(err)
+	}
+	if overview.Summary.Total != 0 || len(overview.Nodes) != 0 {
+		t.Fatalf("deleted node is still visible: %+v", overview)
+	}
+}
+
 func TestEdgeHealthTelegramAlertDoesNotDuplicateSameState(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

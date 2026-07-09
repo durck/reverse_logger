@@ -148,6 +148,26 @@
       opacity: 0.7;
     }
 
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      padding: 4px 9px;
+      border: 1px solid #f2b8b5;
+      border-radius: 6px;
+      background: #fff5f4;
+      color: var(--bad);
+      cursor: pointer;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .action-button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -680,6 +700,7 @@
               <th style="width: 172px;">Last OK</th>
               <th style="width: 190px;">Network</th>
               <th style="width: 172px;">Stale after</th>
+              <th style="width: 112px;">Actions</th>
             </tr>
           </thead>
           <tbody id="health-body"></tbody>
@@ -865,10 +886,12 @@
       return isConnectionsPage ? connectionControls.refresh : controls.refresh;
     }
 
-    async function fetchJSON(url) {
+    async function fetchJSON(url, options = {}) {
+      const headers = { "Accept": "application/json", ...(options.headers || {}) };
       const response = await fetch(url, {
+        ...options,
         credentials: "same-origin",
-        headers: { "Accept": "application/json" },
+        headers,
         cache: "no-store"
       });
       if (!response.ok) {
@@ -1114,9 +1137,43 @@
           cell(formatTime(node.last_seen_at), "mono"),
           cell(formatTime(node.last_ok_at), "mono"),
           stackCell(node.vps_public_ip || "-", node.vps_internal_ip || "-", "mono"),
-          cell(formatTime(node.stale_after), "mono")
+          cell(formatTime(node.stale_after), "mono"),
+          healthActionCell(node)
         );
         targetBody.appendChild(row);
+      }
+    }
+
+    function healthActionCell(node) {
+      const td = document.createElement("td");
+      if (!isHealthPage) {
+        td.textContent = "-";
+        return td;
+      }
+      const button = document.createElement("button");
+      button.className = "action-button";
+      button.type = "button";
+      button.textContent = "Remove";
+      button.title = `Remove ${node.vps_name || "VPS"} from health monitoring`;
+      button.addEventListener("click", () => removeHealthNode(node, button));
+      td.appendChild(button);
+      return td;
+    }
+
+    async function removeHealthNode(node, button) {
+      const vpsName = String(node.vps_name || "").trim();
+      if (!vpsName) return;
+      if (!window.confirm(`Remove ${vpsName} from VPS health monitoring? It will reappear if it sends another health report.`)) {
+        return;
+      }
+      button.disabled = true;
+      text("statusline", `Removing ${vpsName}`);
+      try {
+        await fetchJSON(`/dashboard/api/edge-health?vps_name=${encodeURIComponent(vpsName)}`, { method: "DELETE" });
+        await loadAll();
+      } catch (error) {
+        button.disabled = false;
+        text("statusline", error.message);
       }
     }
 

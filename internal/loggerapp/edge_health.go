@@ -100,11 +100,15 @@ func (s *Server) handleEdgeHealthExpected(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleDashboardEdgeHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if !s.requireDashboardAuth(w, r) {
+		return
+	}
+	if r.Method == http.MethodDelete {
+		s.handleDashboardEdgeHealthDelete(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -122,6 +126,25 @@ func (s *Server) handleDashboardEdgeHealth(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, overview)
+}
+
+func (s *Server) handleDashboardEdgeHealthDelete(w http.ResponseWriter, r *http.Request) {
+	vpsName := strings.TrimSpace(r.URL.Query().Get("vps_name"))
+	if vpsName == "" {
+		writeError(w, http.StatusBadRequest, "vps_name is required")
+		return
+	}
+	deleted, err := s.store.DeleteEdgeHealthNode(vpsName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   map[bool]string{true: "deleted", false: "not_found"}[deleted],
+		"deleted":  deleted,
+		"vps_name": vpsName,
+	})
 }
 
 func (s *Server) StartEdgeHealthMonitor(ctx context.Context) {
