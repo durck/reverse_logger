@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Store reconciler results as session snapshots and use fresh snapshots as the
+  `Active sessions` source of truth instead of creating synthetic disconnect
+  lifecycle events.
 - Make `rssh-session-reconciler` wait for parseable `reverse_ssh ls` output
   before closing the console, reducing intermittent empty snapshot attempts.
 - Give `rssh-session-reconciler` its own Compose build context so targeted
@@ -12,8 +15,7 @@
   prompt-only output is rejected instead of closing active sessions as
   `live=0`.
 - Add a Docker-managed `rssh-session-reconciler` sidecar that checks
-  `reverse_ssh ls` and closes ghost active sessions with marked synthetic
-  disconnect events.
+  `reverse_ssh ls` and posts live session snapshots to the logger.
 - Pass all `rssh-logger` runtime configuration variables from Compose,
   including the dashboard active-session cutoff.
 - Add dashboard removal for VPS edge-health nodes while preserving future

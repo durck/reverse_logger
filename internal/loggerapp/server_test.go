@@ -583,7 +583,7 @@ func TestReverseSSHErrorEndpointStoresEventAndSendsTelegram(t *testing.T) {
 	}
 }
 
-func TestSessionSnapshotEndpointClosesGhostSession(t *testing.T) {
+func TestSessionSnapshotEndpointRecordsLiveSnapshot(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -612,8 +612,8 @@ func TestSessionSnapshotEndpointClosesGhostSession(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("snapshot status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"closed":1`) || !strings.Contains(rec.Body.String(), "ghost-id") {
-		t.Fatalf("snapshot response did not close ghost: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"live":0`) || !strings.Contains(rec.Body.String(), `"closed":0`) {
+		t.Fatalf("snapshot response = %s", rec.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodPost, "/session-snapshots", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer session-secret")
@@ -633,8 +633,8 @@ func TestSessionSnapshotEndpointClosesGhostSession(t *testing.T) {
 	if overview.Totals.Active != 0 || len(overview.ActiveSessions) != 0 {
 		t.Fatalf("ghost remained active: %+v totals=%+v", overview.ActiveSessions, overview.Totals)
 	}
-	if len(overview.Recent) == 0 || !overview.Recent[0].Synthetic || overview.Recent[0].IngestSource != "reconciler" {
-		t.Fatalf("recent session missing synthetic marker: %+v", overview.Recent)
+	if len(overview.Recent) == 0 || overview.Recent[0].Synthetic || overview.Recent[0].IngestSource == "reconciler" {
+		t.Fatalf("snapshot created synthetic recent event: %+v", overview.Recent)
 	}
 }
 

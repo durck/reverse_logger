@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,6 +243,20 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 	raw_ingress_json TEXT
 );
 
+CREATE TABLE IF NOT EXISTS session_snapshots (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	checked_at TEXT NOT NULL,
+	received_at TEXT NOT NULL,
+	live_count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_snapshot_live_ids (
+	snapshot_id INTEGER NOT NULL,
+	reverse_ssh_id TEXT NOT NULL,
+	PRIMARY KEY (snapshot_id, reverse_ssh_id),
+	FOREIGN KEY (snapshot_id) REFERENCES session_snapshots(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS telegram_deliveries (
 	event_hash TEXT NOT NULL,
 	chat_id TEXT NOT NULL,
@@ -327,6 +342,8 @@ CREATE TABLE IF NOT EXISTS reverse_ssh_error_telegram_deliveries (
 		"CREATE INDEX IF NOT EXISTS idx_enriched_ingress_status ON enriched_events(ingress_event_hash, status)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_reverse_status ON enriched_events(reverse_ssh_id, status, correlation_status)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_ingest_source ON enriched_events(ingest_source, ingest_reason)",
+		"CREATE INDEX IF NOT EXISTS idx_session_snapshots_checked_at ON session_snapshots(checked_at, id)",
+		"CREATE INDEX IF NOT EXISTS idx_session_snapshot_live_ids_reverse_ssh_id ON session_snapshot_live_ids(reverse_ssh_id)",
 	}
 	for _, stmt := range indexes {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -861,10 +878,11 @@ type SessionSnapshotResult struct {
 	Live                int      `json:"live"`
 	Closed              int      `json:"closed"`
 	ClosedReverseSSHIDs []string `json:"closed_reverse_ssh_ids"`
+	SnapshotID          int64    `json:"snapshot_id"`
 }
 
 func (s *Store) ReconcileSessionSnapshot(liveReverseSSHIDs []string, checkedAt time.Time) (SessionSnapshotResult, error) {
-	live := normalizeReverseSSHIDSet(liveReverseSSHIDs)
+	live := normalizeReverseSSHIDs(liveReverseSSHIDs)
 	if checkedAt.IsZero() {
 		checkedAt = time.Now().UTC()
 	} else {
@@ -876,27 +894,44 @@ func (s *Store) ReconcileSessionSnapshot(liveReverseSSHIDs []string, checkedAt t
 	}
 
 	result := SessionSnapshotResult{
-		ActiveBefore: len(active),
-		Live:         len(live),
+		ActiveBefore:        len(active),
+		Live:                len(live),
+		ClosedReverseSSHIDs: []string{},
 	}
-	for _, previous := range active {
-		if live[previous.ReverseSSHID] {
-			continue
-		}
-		event := events.NewSyntheticDisconnectedEvent(previous, checkedAt, events.IngestReasonMissingFromLiveSnapshot)
-		if _, err := s.InsertEvent(event); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
+INSERT INTO session_snapshots (checked_at, received_at, live_count)
+VALUES (?, ?, ?)`,
+		checkedAt.Format(time.RFC3339Nano),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		len(live),
+	)
+	if err != nil {
+		return result, err
+	}
+	snapshotID, err := res.LastInsertId()
+	if err != nil {
+		return result, err
+	}
+	for _, id := range live {
+		if _, err := tx.Exec(`
+INSERT OR IGNORE INTO session_snapshot_live_ids (snapshot_id, reverse_ssh_id)
+VALUES (?, ?)`,
+			snapshotID,
+			id,
+		); err != nil {
 			return result, err
 		}
-		enriched := events.NewSyntheticEnrichedDisconnectedEvent(event, previous)
-		inserted, err := s.InsertEnrichedEvent(enriched)
-		if err != nil {
-			return result, err
-		}
-		if inserted {
-			result.Closed++
-			result.ClosedReverseSSHIDs = append(result.ClosedReverseSSHIDs, previous.ReverseSSHID)
-		}
 	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	result.SnapshotID = snapshotID
 	return result, nil
 }
 
@@ -906,6 +941,7 @@ WITH latest AS (
 	SELECT max(id) AS id
 	FROM enriched_events
 	WHERE reverse_ssh_id <> ''
+	  AND lower(coalesce(ingest_source, '')) <> 'reconciler'
 	GROUP BY reverse_ssh_id
 )
 SELECT ee.event_hash, ee.source_event_hash, ee.ingress_event_hash,
@@ -939,13 +975,24 @@ ORDER BY ee.received_at ASC, ee.id ASC`)
 
 func normalizeReverseSSHIDSet(ids []string) map[string]bool {
 	out := map[string]bool{}
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
+	for _, id := range normalizeReverseSSHIDs(ids) {
 		out[id] = true
 	}
+	return out
+}
+
+func normalizeReverseSSHIDs(ids []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Strings(out)
 	return out
 }
 
