@@ -583,6 +583,83 @@ func TestReverseSSHErrorEndpointStoresEventAndSendsTelegram(t *testing.T) {
 	}
 }
 
+func TestSessionSnapshotEndpointClosesGhostSession(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.SetDashboardConfig(store.DashboardConfig{ActiveSessionMaxAge: 0})
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+	server.SetSessionSnapshotToken("session-secret")
+
+	webhookReq := httptest.NewRequest(http.MethodPost, "/hooks/secret", strings.NewReader(`{"Status":"connected","ID":"ghost-id","IP":"192.0.2.2:4444","HostName":"ghost.host","Timestamp":"2026-06-09T12:00:05Z"}`))
+	webhookRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(webhookRec, webhookReq)
+	if webhookRec.Code != http.StatusAccepted {
+		t.Fatalf("webhook status = %d body=%s", webhookRec.Code, webhookRec.Body.String())
+	}
+
+	body := `{"live_reverse_ssh_ids":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/session-snapshots/session-secret", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("snapshot status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"closed":1`) || !strings.Contains(rec.Body.String(), "ghost-id") {
+		t.Fatalf("snapshot response did not close ghost: %s", rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/session-snapshots", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer session-secret")
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("bearer snapshot status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"closed":0`) {
+		t.Fatalf("duplicate snapshot closed again: %s", rec.Body.String())
+	}
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 0 || len(overview.ActiveSessions) != 0 {
+		t.Fatalf("ghost remained active: %+v totals=%+v", overview.ActiveSessions, overview.Totals)
+	}
+	if len(overview.Recent) == 0 || !overview.Recent[0].Synthetic || overview.Recent[0].IngestSource != "reconciler" {
+		t.Fatalf("recent session missing synthetic marker: %+v", overview.Recent)
+	}
+}
+
+func TestSessionSnapshotEndpointRejectsWrongToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	tg, err := telegram.New(telegram.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer("secret", "edge-secret", st, tg)
+	server.SetSessionSnapshotToken("session-secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/session-snapshots/wrong", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestIngressEventEndpointRejectsWrongToken(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {

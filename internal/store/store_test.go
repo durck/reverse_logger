@@ -439,6 +439,56 @@ func TestDashboardOverviewReportsActiveSessions(t *testing.T) {
 	}
 }
 
+func TestReconcileSessionSnapshotClosesMissingActiveSession(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.SetDashboardConfig(DashboardConfig{ActiveSessionMaxAge: 0})
+
+	now := time.Now().UTC()
+	seedDashboardEnrichedForClient(t, st, "live-open", "client-live", "connected", "matched", "wss", "edge-1", "live.host", "198.51.100.10", "203.0.113.10", "edge1.example.com", now.Add(-30*time.Minute))
+	seedDashboardEnrichedForClient(t, st, "ghost-open", "client-ghost", "connected", "matched", "wss", "edge-1", "ghost.host", "198.51.100.11", "203.0.113.10", "edge1.example.com", now.Add(-25*time.Minute))
+
+	result, err := st.ReconcileSessionSnapshot([]string{"client-live"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveBefore != 2 || result.Live != 1 || result.Closed != 1 || len(result.ClosedReverseSSHIDs) != 1 || result.ClosedReverseSSHIDs[0] != "client-ghost" {
+		t.Fatalf("unexpected snapshot result: %+v", result)
+	}
+	second, err := st.ReconcileSessionSnapshot([]string{"client-live"}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Closed != 0 {
+		t.Fatalf("second snapshot created duplicate close: %+v", second)
+	}
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 1 || len(overview.ActiveSessions) != 1 || overview.ActiveSessions[0].ReverseSSHID != "client-live" {
+		t.Fatalf("active sessions after reconciliation = %+v totals=%+v", overview.ActiveSessions, overview.Totals)
+	}
+	events, err := st.DashboardEvents(context.Background(), DashboardEventQuery{Window: 24 * time.Hour, Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].ReverseSSHID != "client-ghost" || !events[0].Synthetic || events[0].IngestSource != "reconciler" || events[0].IngestReason != "missing_from_live_snapshot" {
+		t.Fatalf("recent event did not expose reconciled synthetic close: %+v", events)
+	}
+	var syntheticCount int
+	if err := st.db.QueryRow(`SELECT count(*) FROM enriched_events WHERE reverse_ssh_id = ? AND ingest_source = 'reconciler'`, "client-ghost").Scan(&syntheticCount); err != nil {
+		t.Fatal(err)
+	}
+	if syntheticCount != 1 {
+		t.Fatalf("synthetic close count = %d", syntheticCount)
+	}
+}
+
 func TestDashboardOverviewExpiresStaleActiveSessions(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

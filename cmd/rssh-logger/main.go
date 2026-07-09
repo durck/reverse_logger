@@ -31,6 +31,7 @@ func main() {
 	}
 
 	server := loggerapp.NewServerWithDashboardTokenAndEdgeHealth(config.WebhookToken, config.EdgeForwardToken, config.EdgeHealth, st, tg, config.IngressWSPath, config.IngressPushPath, config.DashboardToken)
+	server.SetSessionSnapshotToken(config.SessionSnapshotToken)
 	go server.StartEdgeHealthMonitor(context.Background())
 	log.Printf("rssh-logger listening on %s", config.ListenAddr)
 	httpServer := &http.Server{

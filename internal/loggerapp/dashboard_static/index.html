@@ -541,6 +541,7 @@
 
     .pill.disconnected,
     .pill.ambiguous,
+    .pill.reconciled,
     .pill.degraded,
     .pill.warning {
       background: #fff1d6;
@@ -1242,7 +1243,7 @@
         row.append(
           cell(formatTime(event.received_at), "mono"),
           pillCell(event.status),
-          pillCell(event.correlation_status),
+          pillCell(event.synthetic ? "reconciled" : event.correlation_status),
           stackCell(event.host_name || event.computer_name || "-", event.user_name || event.version || "-"),
           stackCell(event.real_client_ip || "-", event.ip_addr || event.ip_raw || "-", "mono"),
           stackCell(event.ingress_host || "-", `${event.vps_name || "-"} / ${vpsIP(event)} / ${(event.transport || "-").toUpperCase()}`, "mono"),

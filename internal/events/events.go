@@ -15,10 +15,19 @@ import (
 const (
 	DefaultWSPath   = "/ws"
 	DefaultPushPath = "/push"
+
+	IngestSourceWebhook    = "webhook"
+	IngestSourceReconciler = "reconciler"
+
+	IngestReasonWebhook                 = "webhook"
+	IngestReasonMissingFromLiveSnapshot = "missing_from_live_snapshot"
 )
 
 type Event struct {
 	EventHash            string          `json:"event_hash"`
+	IngestSource         string          `json:"ingest_source,omitempty"`
+	IngestReason         string          `json:"ingest_reason,omitempty"`
+	Synthetic            bool            `json:"synthetic,omitempty"`
 	Status               string          `json:"status"`
 	ReverseSSHID         string          `json:"reverse_ssh_id"`
 	HostName             string          `json:"host_name"`
@@ -94,6 +103,9 @@ type EnrichedEvent struct {
 	EventHash            string          `json:"event_hash"`
 	SourceEventHash      string          `json:"source_event_hash"`
 	IngressEventHash     string          `json:"ingress_event_hash,omitempty"`
+	IngestSource         string          `json:"ingest_source,omitempty"`
+	IngestReason         string          `json:"ingest_reason,omitempty"`
+	Synthetic            bool            `json:"synthetic,omitempty"`
 	CorrelationStatus    string          `json:"correlation_status"`
 	CorrelationMethod    string          `json:"correlation_method,omitempty"`
 	Status               string          `json:"status"`
@@ -175,6 +187,8 @@ func eventFromClientState(state clientState, receivedAt time.Time, raw json.RawM
 	ipAddr, ipPort := ParseEndpoint(state.IP)
 	proxySourceIP, _ := ParseEndpoint(state.ProxySourceIP)
 	event := Event{
+		IngestSource:         IngestSourceWebhook,
+		IngestReason:         IngestReasonWebhook,
 		Status:               strings.ToLower(strings.TrimSpace(state.Status)),
 		ReverseSSHID:         strings.TrimSpace(state.ID),
 		HostName:             strings.TrimSpace(state.HostName),
@@ -192,6 +206,49 @@ func eventFromClientState(state clientState, receivedAt time.Time, raw json.RawM
 		RawJSON:              raw,
 	}
 	event.EventHash = HashEvent(event)
+	return event
+}
+
+func NewSyntheticDisconnectedEvent(previous EnrichedEvent, receivedAt time.Time, reason string) Event {
+	reason = normalizeIngestReason(reason)
+	if reason == "" {
+		reason = IngestReasonMissingFromLiveSnapshot
+	}
+	if receivedAt.IsZero() {
+		receivedAt = time.Now()
+	}
+	event := Event{
+		IngestSource:         IngestSourceReconciler,
+		IngestReason:         reason,
+		Synthetic:            true,
+		Status:               "disconnected",
+		ReverseSSHID:         strings.TrimSpace(previous.ReverseSSHID),
+		HostName:             strings.TrimSpace(previous.HostName),
+		UserName:             strings.TrimSpace(previous.UserName),
+		ComputerName:         strings.TrimSpace(previous.ComputerName),
+		IPRaw:                strings.TrimSpace(previous.IPRaw),
+		IPAddr:               strings.TrimSpace(previous.IPAddr),
+		IPPort:               previous.IPPort,
+		Transport:            strings.TrimSpace(previous.Transport),
+		PublicKeyFingerprint: strings.TrimSpace(previous.PublicKeyFingerprint),
+		ProxySourceIP:        strings.TrimSpace(previous.ProxySourceIP),
+		Version:              strings.TrimSpace(previous.Version),
+		SourceTS:             receivedAt.UTC(),
+		ReceivedAt:           receivedAt.UTC(),
+	}
+	event.EventHash = HashSyntheticDisconnectEvent(previous, reason)
+	raw, _ := json.Marshal(map[string]any{
+		"synthetic":       true,
+		"ingest_source":   event.IngestSource,
+		"ingest_reason":   event.IngestReason,
+		"status":          event.Status,
+		"reverse_ssh_id":  event.ReverseSSHID,
+		"previous_hash":   strings.TrimSpace(previous.SourceEventHash),
+		"checked_at":      event.ReceivedAt.Format(time.RFC3339Nano),
+		"correlation":     strings.TrimSpace(previous.CorrelationStatus),
+		"correlation_via": strings.TrimSpace(previous.CorrelationMethod),
+	})
+	event.RawJSON = raw
 	return event
 }
 
@@ -260,6 +317,19 @@ func HashEvent(event Event) string {
 		event.HostName,
 	}
 	return hashStrings(parts...)
+}
+
+func HashSyntheticDisconnectEvent(previous EnrichedEvent, reason string) string {
+	sourceEventHash := strings.TrimSpace(previous.SourceEventHash)
+	if sourceEventHash == "" {
+		sourceEventHash = strings.TrimSpace(previous.EventHash)
+	}
+	return hashStrings(
+		IngestSourceReconciler,
+		normalizeIngestReason(reason),
+		strings.TrimSpace(previous.ReverseSSHID),
+		sourceEventHash,
+	)
 }
 
 func NewEdgeEvent(vpsName, vpsPublicIP string, vpsPort int, clientIP string, clientPort int, receivedAt time.Time, raw json.RawMessage) EdgeEvent {
@@ -647,8 +717,19 @@ func NewEnrichedEvent(event Event, ingress *IngressEvent, status string) Enriche
 }
 
 func NewEnrichedEventWithMethod(event Event, ingress *IngressEvent, status, method string) EnrichedEvent {
+	ingestSource := strings.TrimSpace(event.IngestSource)
+	if ingestSource == "" {
+		ingestSource = IngestSourceWebhook
+	}
+	ingestReason := normalizeIngestReason(event.IngestReason)
+	if ingestReason == "" {
+		ingestReason = IngestReasonWebhook
+	}
 	enriched := EnrichedEvent{
 		SourceEventHash:      event.EventHash,
+		IngestSource:         ingestSource,
+		IngestReason:         ingestReason,
+		Synthetic:            event.Synthetic,
 		CorrelationStatus:    strings.TrimSpace(status),
 		CorrelationMethod:    strings.TrimSpace(method),
 		Status:               event.Status,
@@ -686,6 +767,21 @@ func NewEnrichedEventWithMethod(event Event, ingress *IngressEvent, status, meth
 	return enriched
 }
 
+func NewSyntheticEnrichedDisconnectedEvent(event Event, previous EnrichedEvent) EnrichedEvent {
+	enriched := NewEnrichedEventWithMethod(event, nil, previous.CorrelationStatus, "reconciler")
+	enriched.IngressEventHash = previous.IngressEventHash
+	enriched.RealClientIP = previous.RealClientIP
+	enriched.ClientPort = previous.ClientPort
+	enriched.VPSName = previous.VPSName
+	enriched.VPSPublicIP = previous.VPSPublicIP
+	enriched.VPSInternalIP = previous.VPSInternalIP
+	enriched.ForwarderIP = previous.ForwarderIP
+	enriched.IngressReceivedAt = previous.IngressReceivedAt
+	enriched.RawIngressJSON = append([]byte(nil), previous.RawIngressJSON...)
+	enriched.EventHash = HashEnrichedEvent(enriched)
+	return enriched
+}
+
 func HashEnrichedEvent(event EnrichedEvent) string {
 	return hashStrings(
 		event.SourceEventHash,
@@ -694,7 +790,16 @@ func HashEnrichedEvent(event EnrichedEvent) string {
 		event.CorrelationMethod,
 		event.RealClientIP,
 		event.Transport,
+		event.IngestSource,
+		event.IngestReason,
 	)
+}
+
+func normalizeIngestReason(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, " ", "_")
+	return value
 }
 
 func hashStrings(parts ...string) string {

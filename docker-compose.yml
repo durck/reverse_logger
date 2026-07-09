@@ -23,11 +23,14 @@ services:
     image: reverse-logger/rssh-logger:local
     container_name: rssh-logger
     restart: unless-stopped
+    depends_on:
+      - rssh-session-reconciler
     environment:
       LISTEN_ADDR: ":8080"
       DATA_DIR: /data
       WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:?set WEBHOOK_TOKEN in .env}
       EDGE_FORWARD_TOKEN: ${EDGE_FORWARD_TOKEN:-}
+      RSSH_SESSION_FORWARD_TOKEN: ${RSSH_SESSION_FORWARD_TOKEN:-}
       EDGE_HEALTH_TOKEN: ${EDGE_HEALTH_TOKEN:-}
       EDGE_HEALTH_DEFAULT_INTERVAL: ${EDGE_HEALTH_DEFAULT_INTERVAL:-30s}
       EDGE_HEALTH_MISSED_REPORTS: ${EDGE_HEALTH_MISSED_REPORTS:-3}
@@ -57,6 +60,34 @@ services:
     networks:
       - reverse_internal
 
+  rssh-session-reconciler:
+    image: reverse-logger/rssh-logger:local
+    container_name: rssh-session-reconciler
+    restart: unless-stopped
+    depends_on:
+      - reverse_ssh
+    command: ["/usr/local/bin/rssh-session-reconciler"]
+    user: "0:0"
+    environment:
+      RSSH_SESSION_FORWARD_URL: http://rssh-logger:8080/session-snapshots
+      RSSH_SESSION_FORWARD_TOKEN: ${RSSH_SESSION_FORWARD_TOKEN:?set RSSH_SESSION_FORWARD_TOKEN in .env}
+      RSSH_SESSION_INTERVAL: ${RSSH_SESSION_INTERVAL:-30s}
+      RSSH_SESSION_TIMEOUT: ${RSSH_SESSION_TIMEOUT:-10s}
+      RSSH_SESSION_CONSOLE_HOST: reverse_ssh
+      RSSH_SESSION_CONSOLE_PORT: "2222"
+      RSSH_SESSION_CONSOLE_USER: ${RSSH_SESSION_CONSOLE_USER:-root}
+      RSSH_SESSION_CONSOLE_KEY_PATH: /run/secrets/rssh_session_reconciler
+      RSSH_SESSION_KNOWN_HOSTS_PATH: /state/known_hosts
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,rssh-logger,reverse_ssh}
+    volumes:
+      - ${RSSH_SESSION_CONSOLE_KEY_PATH:?set RSSH_SESSION_CONSOLE_KEY_PATH in .env}:/run/secrets/rssh_session_reconciler:ro
+      - rssh_session_reconciler_state:/state
+    networks:
+      - reverse_internal
+
 networks:
   reverse_internal:
     driver: bridge
+
+volumes:
+  rssh_session_reconciler_state:

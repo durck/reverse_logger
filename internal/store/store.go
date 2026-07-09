@@ -130,6 +130,9 @@ func (s *Store) init() error {
 CREATE TABLE IF NOT EXISTS events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	event_hash TEXT NOT NULL UNIQUE,
+	ingest_source TEXT NOT NULL DEFAULT 'webhook',
+	ingest_reason TEXT,
+	synthetic INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL,
 	reverse_ssh_id TEXT,
 	host_name TEXT,
@@ -209,6 +212,9 @@ CREATE TABLE IF NOT EXISTS enriched_events (
 	event_hash TEXT NOT NULL UNIQUE,
 	source_event_hash TEXT NOT NULL UNIQUE,
 	ingress_event_hash TEXT,
+	ingest_source TEXT NOT NULL DEFAULT 'webhook',
+	ingest_reason TEXT,
+	synthetic INTEGER NOT NULL DEFAULT 0,
 	correlation_status TEXT NOT NULL,
 	correlation_method TEXT,
 	status TEXT NOT NULL,
@@ -272,18 +278,28 @@ CREATE TABLE IF NOT EXISTS reverse_ssh_error_telegram_deliveries (
 		{table: "events", name: "transport", def: "TEXT"},
 		{table: "events", name: "public_key_fingerprint", def: "TEXT"},
 		{table: "events", name: "proxy_source_ip", def: "TEXT"},
+		{table: "events", name: "ingest_source", def: "TEXT NOT NULL DEFAULT 'webhook'"},
+		{table: "events", name: "ingest_reason", def: "TEXT"},
+		{table: "events", name: "synthetic", def: "INTEGER NOT NULL DEFAULT 0"},
 		{table: "ingress_events", name: "forwarder_ip", def: "TEXT"},
 		{table: "enriched_events", name: "correlation_method", def: "TEXT"},
 		{table: "enriched_events", name: "public_key_fingerprint", def: "TEXT"},
 		{table: "enriched_events", name: "proxy_source_ip", def: "TEXT"},
 		{table: "enriched_events", name: "forwarder_ip", def: "TEXT"},
+		{table: "enriched_events", name: "ingest_source", def: "TEXT NOT NULL DEFAULT 'webhook'"},
+		{table: "enriched_events", name: "ingest_reason", def: "TEXT"},
+		{table: "enriched_events", name: "synthetic", def: "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(column.table, column.name, column.def); err != nil {
 			return err
 		}
 	}
 	normalizers := []string{
+		"UPDATE events SET ingest_source = 'webhook' WHERE ingest_source IS NULL OR ingest_source = ''",
+		"UPDATE events SET ingest_reason = 'webhook' WHERE ingest_reason IS NULL OR ingest_reason = ''",
 		"UPDATE ingress_events SET forwarder_ip = '' WHERE forwarder_ip IS NULL",
+		"UPDATE enriched_events SET ingest_source = 'webhook' WHERE ingest_source IS NULL OR ingest_source = ''",
+		"UPDATE enriched_events SET ingest_reason = 'webhook' WHERE ingest_reason IS NULL OR ingest_reason = ''",
 		"UPDATE enriched_events SET correlation_method = '' WHERE correlation_method IS NULL",
 		"UPDATE enriched_events SET forwarder_ip = '' WHERE forwarder_ip IS NULL",
 	}
@@ -295,6 +311,7 @@ CREATE TABLE IF NOT EXISTS reverse_ssh_error_telegram_deliveries (
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at)",
 		"CREATE INDEX IF NOT EXISTS idx_events_source_ts ON events(source_ts)",
+		"CREATE INDEX IF NOT EXISTS idx_events_ingest_source ON events(ingest_source, ingest_reason)",
 		"CREATE INDEX IF NOT EXISTS idx_events_ip_addr ON events(ip_addr)",
 		"CREATE INDEX IF NOT EXISTS idx_events_proxy_source_ip ON events(proxy_source_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_ingress_nginx_received_at ON ingress_events(nginx_received_at)",
@@ -309,6 +326,7 @@ CREATE TABLE IF NOT EXISTS reverse_ssh_error_telegram_deliveries (
 		"CREATE INDEX IF NOT EXISTS idx_reverse_ssh_errors_remote_ip ON reverse_ssh_errors(remote_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_ingress_status ON enriched_events(ingress_event_hash, status)",
 		"CREATE INDEX IF NOT EXISTS idx_enriched_reverse_status ON enriched_events(reverse_ssh_id, status, correlation_status)",
+		"CREATE INDEX IF NOT EXISTS idx_enriched_ingest_source ON enriched_events(ingest_source, ingest_reason)",
 	}
 	for _, stmt := range indexes {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -323,6 +341,11 @@ func (s *Store) InsertEvent(event events.Event) (bool, error) {
 	if !event.SourceTS.IsZero() {
 		sourceTS = event.SourceTS.UTC().Format(time.RFC3339Nano)
 	}
+	ingestSource, ingestReason := normalizeIngestFields(event.IngestSource, event.IngestReason)
+	synthetic := 0
+	if event.Synthetic {
+		synthetic = 1
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err
@@ -331,11 +354,15 @@ func (s *Store) InsertEvent(event events.Event) (bool, error) {
 
 	res, err := tx.Exec(`
 INSERT OR IGNORE INTO events (
-	event_hash, status, reverse_ssh_id, host_name, user_name, computer_name,
-	ip_raw, ip_addr, ip_port, transport, public_key_fingerprint, proxy_source_ip,
-	version, source_ts, received_at, raw_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	event_hash, ingest_source, ingest_reason, synthetic, status, reverse_ssh_id,
+	host_name, user_name, computer_name, ip_raw, ip_addr, ip_port, transport,
+	public_key_fingerprint, proxy_source_ip, version, source_ts, received_at,
+	raw_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.EventHash,
+		ingestSource,
+		ingestReason,
+		synthetic,
 		event.Status,
 		event.ReverseSSHID,
 		event.HostName,
@@ -561,8 +588,9 @@ func (s *Store) GetEnrichedEvent(sourceEventHash string) (events.EnrichedEvent, 
 	}
 	row := s.db.QueryRow(`
 SELECT event_hash, source_event_hash, ingress_event_hash, correlation_status,
-	correlation_method, status, reverse_ssh_id, host_name, user_name, computer_name,
-	ip_raw, ip_addr, ip_port, real_client_ip, client_port, transport,
+	correlation_method, ingest_source, ingest_reason, synthetic, status,
+	reverse_ssh_id, host_name, user_name, computer_name, ip_raw, ip_addr,
+	ip_port, real_client_ip, client_port, transport,
 	public_key_fingerprint, proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip,
 	forwarder_ip, version, source_ts, received_at, ingress_received_at,
 	raw_webhook_json, raw_ingress_json
@@ -719,18 +747,28 @@ func (s *Store) InsertEnrichedEvent(event events.EnrichedEvent) (bool, error) {
 	if !event.IngressReceivedAt.IsZero() {
 		ingressReceivedAt = event.IngressReceivedAt.UTC().Format(time.RFC3339Nano)
 	}
+	ingestSource, ingestReason := normalizeIngestFields(event.IngestSource, event.IngestReason)
+	synthetic := 0
+	if event.Synthetic {
+		synthetic = 1
+	}
 
 	res, err := tx.Exec(`
 INSERT INTO enriched_events (
-	event_hash, source_event_hash, ingress_event_hash, correlation_status,
-	correlation_method, status, reverse_ssh_id, host_name, user_name, computer_name, ip_raw, ip_addr,
-	ip_port, real_client_ip, client_port, transport, public_key_fingerprint,
-	proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip, forwarder_ip, version,
-	source_ts, received_at, ingress_received_at, raw_webhook_json, raw_ingress_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	event_hash, source_event_hash, ingress_event_hash, ingest_source, ingest_reason,
+	synthetic, correlation_status, correlation_method, status, reverse_ssh_id,
+	host_name, user_name, computer_name, ip_raw, ip_addr, ip_port,
+	real_client_ip, client_port, transport, public_key_fingerprint,
+	proxy_source_ip, vps_name, vps_public_ip, vps_internal_ip, forwarder_ip,
+	version, source_ts, received_at, ingress_received_at, raw_webhook_json,
+	raw_ingress_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_event_hash) DO UPDATE SET
 	event_hash = excluded.event_hash,
 	ingress_event_hash = excluded.ingress_event_hash,
+	ingest_source = excluded.ingest_source,
+	ingest_reason = excluded.ingest_reason,
+	synthetic = excluded.synthetic,
 	correlation_status = excluded.correlation_status,
 	correlation_method = excluded.correlation_method,
 	real_client_ip = excluded.real_client_ip,
@@ -755,6 +793,9 @@ WHERE enriched_events.event_hash <> excluded.event_hash
 		event.EventHash,
 		event.SourceEventHash,
 		event.IngressEventHash,
+		ingestSource,
+		ingestReason,
+		synthetic,
 		event.CorrelationStatus,
 		event.CorrelationMethod,
 		event.Status,
@@ -815,13 +856,107 @@ func (s *Store) ReconcileIngressEvent(ingress events.IngressEvent) (int, error) 
 	return s.reconcileIngressEvent(ingress, windows, false)
 }
 
+type SessionSnapshotResult struct {
+	ActiveBefore        int      `json:"active_before"`
+	Live                int      `json:"live"`
+	Closed              int      `json:"closed"`
+	ClosedReverseSSHIDs []string `json:"closed_reverse_ssh_ids"`
+}
+
+func (s *Store) ReconcileSessionSnapshot(liveReverseSSHIDs []string, checkedAt time.Time) (SessionSnapshotResult, error) {
+	live := normalizeReverseSSHIDSet(liveReverseSSHIDs)
+	if checkedAt.IsZero() {
+		checkedAt = time.Now().UTC()
+	} else {
+		checkedAt = checkedAt.UTC()
+	}
+	active, err := s.latestConnectedEnrichedEvents()
+	if err != nil {
+		return SessionSnapshotResult{}, err
+	}
+
+	result := SessionSnapshotResult{
+		ActiveBefore: len(active),
+		Live:         len(live),
+	}
+	for _, previous := range active {
+		if live[previous.ReverseSSHID] {
+			continue
+		}
+		event := events.NewSyntheticDisconnectedEvent(previous, checkedAt, events.IngestReasonMissingFromLiveSnapshot)
+		if _, err := s.InsertEvent(event); err != nil {
+			return result, err
+		}
+		enriched := events.NewSyntheticEnrichedDisconnectedEvent(event, previous)
+		inserted, err := s.InsertEnrichedEvent(enriched)
+		if err != nil {
+			return result, err
+		}
+		if inserted {
+			result.Closed++
+			result.ClosedReverseSSHIDs = append(result.ClosedReverseSSHIDs, previous.ReverseSSHID)
+		}
+	}
+	return result, nil
+}
+
+func (s *Store) latestConnectedEnrichedEvents() ([]events.EnrichedEvent, error) {
+	rows, err := s.db.Query(`
+WITH latest AS (
+	SELECT max(id) AS id
+	FROM enriched_events
+	WHERE reverse_ssh_id <> ''
+	GROUP BY reverse_ssh_id
+)
+SELECT ee.event_hash, ee.source_event_hash, ee.ingress_event_hash,
+	ee.correlation_status, ee.correlation_method, ee.ingest_source,
+	ee.ingest_reason, ee.synthetic, ee.status, ee.reverse_ssh_id,
+	ee.host_name, ee.user_name, ee.computer_name, ee.ip_raw, ee.ip_addr,
+	ee.ip_port, ee.real_client_ip, ee.client_port, ee.transport,
+	ee.public_key_fingerprint, ee.proxy_source_ip, ee.vps_name,
+	ee.vps_public_ip, ee.vps_internal_ip, ee.forwarder_ip, ee.version,
+	ee.source_ts, ee.received_at, ee.ingress_received_at,
+	ee.raw_webhook_json, ee.raw_ingress_json
+FROM enriched_events ee
+JOIN latest ON latest.id = ee.id
+WHERE ee.status = 'connected'
+ORDER BY ee.received_at ASC, ee.id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]events.EnrichedEvent, 0)
+	for rows.Next() {
+		event, err := scanEnrichedEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func normalizeReverseSSHIDSet(ids []string) map[string]bool {
+	out := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		out[id] = true
+	}
+	return out
+}
+
 func (s *Store) reconcileIngressEvent(ingress events.IngressEvent, windows []timeWindow, requireIPMatch bool) (int, error) {
 	args := make([]any, 0, len(windows)*4+8)
 	timePredicate := buildEventTimePredicate(windows, &args)
 	query := `
-SELECT event_hash, status, reverse_ssh_id, host_name, user_name, computer_name,
-	ip_raw, ip_addr, ip_port, transport, public_key_fingerprint, proxy_source_ip,
-	version, source_ts, received_at, raw_json
+SELECT event_hash, ingest_source, ingest_reason, synthetic, status, reverse_ssh_id,
+	host_name, user_name, computer_name, ip_raw, ip_addr, ip_port, transport,
+	public_key_fingerprint, proxy_source_ip, version, source_ts, received_at,
+	raw_json
 FROM events
 WHERE ` + timePredicate + `
 `
@@ -1208,6 +1343,20 @@ func uniqueNonEmpty(values ...string) []string {
 	return out
 }
 
+func normalizeIngestFields(source, reason string) (string, string) {
+	source = strings.ToLower(strings.TrimSpace(source))
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	reason = strings.ReplaceAll(reason, "-", "_")
+	reason = strings.ReplaceAll(reason, " ", "_")
+	if source == "" {
+		source = events.IngestSourceWebhook
+	}
+	if reason == "" {
+		reason = events.IngestReasonWebhook
+	}
+	return source, reason
+}
+
 func (s *Store) findConnectedIngressForClient(reverseSSHID string) (*events.IngressEvent, bool, error) {
 	if reverseSSHID == "" {
 		return nil, false, nil
@@ -1295,17 +1444,21 @@ type rowScanner interface {
 
 func scanEnrichedEvent(row rowScanner) (events.EnrichedEvent, error) {
 	var event events.EnrichedEvent
-	var ingressEventHash, correlationMethod, reverseSSHID, hostName, userName, computerName sql.NullString
+	var ingressEventHash, correlationMethod, ingestSource, ingestReason, reverseSSHID, hostName, userName, computerName sql.NullString
 	var ipRaw, ipAddr, realClientIP, transport, publicKeyFingerprint, proxySourceIP sql.NullString
 	var vpsName, vpsPublicIP, vpsInternalIP, forwarderIP, version sql.NullString
 	var sourceTS, receivedAt, ingressReceivedAt, rawWebhookJSON, rawIngressJSON sql.NullString
 	var ipPort, clientPort sql.NullInt64
+	var synthetic sql.NullInt64
 	if err := row.Scan(
 		&event.EventHash,
 		&event.SourceEventHash,
 		&ingressEventHash,
 		&event.CorrelationStatus,
 		&correlationMethod,
+		&ingestSource,
+		&ingestReason,
+		&synthetic,
 		&event.Status,
 		&reverseSSHID,
 		&hostName,
@@ -1334,6 +1487,15 @@ func scanEnrichedEvent(row rowScanner) (events.EnrichedEvent, error) {
 	}
 	event.IngressEventHash = ingressEventHash.String
 	event.CorrelationMethod = correlationMethod.String
+	event.IngestSource = ingestSource.String
+	if event.IngestSource == "" {
+		event.IngestSource = events.IngestSourceWebhook
+	}
+	event.IngestReason = ingestReason.String
+	if event.IngestReason == "" {
+		event.IngestReason = events.IngestReasonWebhook
+	}
+	event.Synthetic = synthetic.Valid && synthetic.Int64 != 0
 	event.ReverseSSHID = reverseSSHID.String
 	event.HostName = hostName.String
 	event.UserName = userName.String
@@ -1431,9 +1593,14 @@ func scanIngressEvent(row rowScanner) (events.IngressEvent, error) {
 
 func scanEvent(row rowScanner) (events.Event, error) {
 	var event events.Event
+	var ingestSource, ingestReason sql.NullString
 	var sourceTS, receivedAt, rawJSON string
+	var synthetic sql.NullInt64
 	if err := row.Scan(
 		&event.EventHash,
+		&ingestSource,
+		&ingestReason,
+		&synthetic,
 		&event.Status,
 		&event.ReverseSSHID,
 		&event.HostName,
@@ -1452,6 +1619,15 @@ func scanEvent(row rowScanner) (events.Event, error) {
 	); err != nil {
 		return events.Event{}, err
 	}
+	event.IngestSource = ingestSource.String
+	if event.IngestSource == "" {
+		event.IngestSource = events.IngestSourceWebhook
+	}
+	event.IngestReason = ingestReason.String
+	if event.IngestReason == "" {
+		event.IngestReason = events.IngestReasonWebhook
+	}
+	event.Synthetic = synthetic.Valid && synthetic.Int64 != 0
 	if sourceTS != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, sourceTS); err == nil {
 			event.SourceTS = parsed

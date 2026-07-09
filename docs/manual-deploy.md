@@ -123,6 +123,28 @@ cat ~/.ssh/reverse_ssh_operator.pub
 Keep the private key in your local `~/.ssh/` or a vault. Put only the single
 public key line into `SEED_AUTHORIZED_KEYS`.
 
+Generate a separate SSH key for the Docker session reconciler. This key is used
+only by the `rssh-session-reconciler` sidecar to run `ls` against the internal
+`reverse_ssh` console:
+
+```sh
+sudo install -d -m 0750 /opt/reverse-logger/secrets
+sudo ssh-keygen -t ed25519 -a 100 \
+  -f /opt/reverse-logger/secrets/rssh_session_reconciler \
+  -C "rssh_session_reconciler"
+sudo chmod 0600 /opt/reverse-logger/secrets/rssh_session_reconciler
+sudo chmod 0644 /opt/reverse-logger/secrets/rssh_session_reconciler.pub
+```
+
+For a fresh deployment, add both public key lines to the initial
+`authorized_keys` seed. For an existing deployment, do not rely on changing
+`SEED_AUTHORIZED_KEYS`: `reverse_ssh` ignores it after `/data/authorized_keys`
+has already been seeded. Append the reconciler public key instead:
+
+```sh
+sudo sh -c 'cat /opt/reverse-logger/secrets/rssh_session_reconciler.pub >> /opt/reverse-logger/data/reverse_ssh/authorized_keys'
+```
+
 Edit `.env`:
 
 ```sh
@@ -155,6 +177,12 @@ Set at minimum:
 - `WEBHOOK_TOKEN`: first generated token.
 - `EDGE_FORWARD_TOKEN`: second generated token used by VPS nginx edge
   forwarders for central ingress events.
+- `RSSH_SESSION_FORWARD_TOKEN`: token used by the Docker session reconciler.
+  It may match `EDGE_FORWARD_TOKEN`, but separate rotation is cleaner.
+- `RSSH_SESSION_CONSOLE_KEY_PATH`: host path to the reconciler private key,
+  normally `/opt/reverse-logger/secrets/rssh_session_reconciler`.
+- `RSSH_SESSION_INTERVAL` / `RSSH_SESSION_TIMEOUT`: reconciler poll interval
+  and per-iteration timeout.
 - `EDGE_HEALTH_TOKEN`: token used by VPS health reporters. Keep it separate
   from `EDGE_FORWARD_TOKEN` so ingress forwarding and health reporting can be
   rotated independently.

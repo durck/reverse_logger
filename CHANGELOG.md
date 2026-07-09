@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add a Docker-managed `rssh-session-reconciler` sidecar that checks
+  `reverse_ssh ls` and closes ghost active sessions with marked synthetic
+  disconnect events.
 - Pass all `rssh-logger` runtime configuration variables from Compose,
   including the dashboard active-session cutoff.
 - Add dashboard removal for VPS edge-health nodes while preserving future

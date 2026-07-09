@@ -71,6 +71,9 @@ type DashboardEvent struct {
 	Status               string `json:"status"`
 	CorrelationStatus    string `json:"correlation_status"`
 	CorrelationMethod    string `json:"correlation_method,omitempty"`
+	IngestSource         string `json:"ingest_source,omitempty"`
+	IngestReason         string `json:"ingest_reason,omitempty"`
+	Synthetic            bool   `json:"synthetic,omitempty"`
 	ReverseSSHID         string `json:"reverse_ssh_id,omitempty"`
 	HostName             string `json:"host_name,omitempty"`
 	UserName             string `json:"user_name,omitempty"`
@@ -217,9 +220,11 @@ func (s *Store) DashboardEvents(ctx context.Context, query DashboardEventQuery) 
 			OR lower(coalesce(ee.vps_public_ip, '')) LIKE ?
 			OR lower(coalesce(ee.vps_internal_ip, '')) LIKE ?
 			OR lower(coalesce(ee.forwarder_ip, '')) LIKE ?
+			OR lower(coalesce(ee.ingest_source, '')) LIKE ?
+			OR lower(coalesce(ee.ingest_reason, '')) LIKE ?
 			OR lower(coalesce(ie.host, '')) LIKE ?
 		)`)
-		for i := 0; i < 13; i++ {
+		for i := 0; i < 15; i++ {
 			args = append(args, like)
 		}
 	}
@@ -227,10 +232,11 @@ func (s *Store) DashboardEvents(ctx context.Context, query DashboardEventQuery) 
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT ee.id, ee.status, ee.correlation_status, ee.correlation_method, ee.reverse_ssh_id,
-	ee.host_name, ee.user_name, ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port,
-	ee.real_client_ip, ee.client_port, ee.transport, ee.public_key_fingerprint,
-	ee.proxy_source_ip, ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip,
-	ee.forwarder_ip, ie.host, ee.version, ee.received_at, ee.ingress_received_at
+	ee.ingest_source, ee.ingest_reason, ee.synthetic, ee.host_name, ee.user_name,
+	ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port, ee.real_client_ip,
+	ee.client_port, ee.transport, ee.public_key_fingerprint, ee.proxy_source_ip,
+	ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip, ee.forwarder_ip, ie.host,
+	ee.version, ee.received_at, ee.ingress_received_at
 FROM enriched_events ee
 LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
 WHERE `+strings.Join(conditions, " AND ")+`
@@ -568,10 +574,11 @@ WITH latest AS (
 	GROUP BY reverse_ssh_id
 )
 SELECT ee.id, ee.status, ee.correlation_status, ee.correlation_method, ee.reverse_ssh_id,
-	ee.host_name, ee.user_name, ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port,
-	ee.real_client_ip, ee.client_port, ee.transport, ee.public_key_fingerprint,
-	ee.proxy_source_ip, ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip,
-	ee.forwarder_ip, ie.host, ee.version, ee.received_at, ee.ingress_received_at
+	ee.ingest_source, ee.ingest_reason, ee.synthetic, ee.host_name, ee.user_name,
+	ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port, ee.real_client_ip,
+	ee.client_port, ee.transport, ee.public_key_fingerprint, ee.proxy_source_ip,
+	ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip, ee.forwarder_ip, ie.host,
+	ee.version, ee.received_at, ee.ingress_received_at
 FROM enriched_events ee
 JOIN latest ON latest.id = ee.id
 LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
@@ -730,17 +737,20 @@ func truncateDashboardBucket(value time.Time, step time.Duration) time.Time {
 
 func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 	var event DashboardEvent
-	var correlationMethod, reverseSSHID, hostName, userName, computerName sql.NullString
+	var correlationMethod, ingestSource, ingestReason, reverseSSHID, hostName, userName, computerName sql.NullString
 	var ipRaw, ipAddr, realClientIP, transport, publicKeyFingerprint sql.NullString
 	var proxySourceIP, vpsName, vpsPublicIP, vpsInternalIP, forwarderIP, ingressHost sql.NullString
 	var version, ingressReceivedAt sql.NullString
-	var ipPort, clientPort sql.NullInt64
+	var synthetic, ipPort, clientPort sql.NullInt64
 	if err := row.Scan(
 		&event.ID,
 		&event.Status,
 		&event.CorrelationStatus,
 		&correlationMethod,
 		&reverseSSHID,
+		&ingestSource,
+		&ingestReason,
+		&synthetic,
 		&hostName,
 		&userName,
 		&computerName,
@@ -764,6 +774,9 @@ func scanDashboardEvent(row rowScanner) (DashboardEvent, error) {
 		return DashboardEvent{}, err
 	}
 	event.CorrelationMethod = correlationMethod.String
+	event.IngestSource = ingestSource.String
+	event.IngestReason = ingestReason.String
+	event.Synthetic = synthetic.Valid && synthetic.Int64 != 0
 	event.ReverseSSHID = reverseSSHID.String
 	event.HostName = hostName.String
 	event.UserName = userName.String

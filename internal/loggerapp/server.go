@@ -20,14 +20,15 @@ import (
 )
 
 type Server struct {
-	webhookToken     string
-	edgeForwardToken string
-	edgeHealth       EdgeHealthConfig
-	dashboardToken   string
-	ingressWSPath    string
-	ingressPushPath  string
-	store            *store.Store
-	telegram         *telegram.Client
+	webhookToken         string
+	edgeForwardToken     string
+	sessionSnapshotToken string
+	edgeHealth           EdgeHealthConfig
+	dashboardToken       string
+	ingressWSPath        string
+	ingressPushPath      string
+	store                *store.Store
+	telegram             *telegram.Client
 }
 
 const telegramDeliveryClaimStaleAfter = 5 * time.Minute
@@ -71,10 +72,16 @@ func NewServerWithDashboardTokenAndEdgeHealth(webhookToken, edgeForwardToken str
 	}
 }
 
+func (s *Server) SetSessionSnapshotToken(token string) {
+	s.sessionSnapshotToken = strings.TrimSpace(token)
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/hooks/", s.handleWebhook)
+	mux.HandleFunc("/session-snapshots", s.handleSessionSnapshot)
+	mux.HandleFunc("/session-snapshots/", s.handleSessionSnapshot)
 	mux.HandleFunc("/edge-events/", s.handleEdgeEvent)
 	mux.HandleFunc("/edge-health/expected", s.handleEdgeHealthExpected)
 	mux.HandleFunc("/edge-health/expected/", s.handleEdgeHealthExpected)
@@ -90,6 +97,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/dashboard/api/edge-health", s.handleDashboardEdgeHealth)
 	mux.HandleFunc("/dashboard/", s.handleDashboardPage)
 	return mux
+}
+
+type sessionSnapshotRequest struct {
+	CheckedAt         time.Time `json:"checked_at"`
+	LiveReverseSSHIDs []string  `json:"live_reverse_ssh_ids"`
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +214,46 @@ func shouldWaitForTelegramConnectedEnrichment(event events.Event, enriched event
 	return telegramConnectedAlertEnrichmentDelay > 0 &&
 		strings.EqualFold(strings.TrimSpace(event.Status), "connected") &&
 		strings.TrimSpace(enriched.RealClientIP) == ""
+}
+
+func (s *Server) handleSessionSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !tokenMatches(edgeAuthToken(r, "/session-snapshots/"), s.sessionSnapshotToken) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var snapshot sessionSnapshotRequest
+	if err := json.Unmarshal(body, &snapshot); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if snapshot.CheckedAt.IsZero() {
+		snapshot.CheckedAt = time.Now().UTC()
+	} else {
+		snapshot.CheckedAt = snapshot.CheckedAt.UTC()
+	}
+	result, err := s.store.ReconcileSessionSnapshot(snapshot.LiveReverseSSHIDs, snapshot.CheckedAt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":                 "accepted",
+		"checked_at":             snapshot.CheckedAt.Format(time.RFC3339Nano),
+		"active_before":          result.ActiveBefore,
+		"live":                   result.Live,
+		"closed":                 result.Closed,
+		"closed_reverse_ssh_ids": result.ClosedReverseSSHIDs,
+	})
 }
 
 func (s *Server) notifyTelegramEnrichedEvent(ctx context.Context, event events.EnrichedEvent) error {

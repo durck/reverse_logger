@@ -125,10 +125,32 @@ func TestEnvExampleDocumentsComposeVariables(t *testing.T) {
 	}
 }
 
+func TestDockerComposeKeepsSessionPrivateKeyOutOfLoggerService(t *testing.T) {
+	compose := readRepoFile(t, "docker-compose.yml")
+	loggerBlock := composeServiceBlock(t, compose, "rssh-logger")
+	reconcilerBlock := composeServiceBlock(t, compose, "rssh-session-reconciler")
+
+	for _, forbidden := range []string{"RSSH_SESSION_CONSOLE_KEY_PATH", "/run/secrets/rssh_session_reconciler"} {
+		if strings.Contains(loggerBlock, forbidden) {
+			t.Fatalf("rssh-logger service must not receive reconciler private key reference %q", forbidden)
+		}
+		if !strings.Contains(reconcilerBlock, forbidden) {
+			t.Fatalf("rssh-session-reconciler service missing private key reference %q", forbidden)
+		}
+	}
+	if !strings.Contains(loggerBlock, "RSSH_SESSION_FORWARD_TOKEN:") {
+		t.Fatal("rssh-logger service must receive RSSH_SESSION_FORWARD_TOKEN for snapshot endpoint auth")
+	}
+	if !strings.Contains(loggerBlock, "depends_on:\n      - rssh-session-reconciler") {
+		t.Fatal("rssh-logger service must depend on rssh-session-reconciler for targeted compose startup")
+	}
+}
+
 func setMinimalConfigEnv(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"WEBHOOK_TOKEN",
+		"RSSH_SESSION_FORWARD_TOKEN",
 		"DASHBOARD_ACTIVE_SESSION_MAX_AGE",
 		"TELEGRAM_ENABLED",
 		"TELEGRAM_BOT_TOKEN",
@@ -150,6 +172,16 @@ func readRepoFile(t *testing.T, parts ...string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func composeServiceBlock(t *testing.T, compose, service string) string {
+	t.Helper()
+	pattern := regexp.MustCompile(`(?ms)^  ` + regexp.QuoteMeta(service) + `:\n(.*?)(?:\n  [A-Za-z0-9_-]+:\n|\nnetworks:\n|\nvolumes:\n|\z)`)
+	match := pattern.FindStringSubmatch(compose)
+	if len(match) != 2 {
+		t.Fatalf("service %s not found in compose", service)
+	}
+	return match[1]
 }
 
 func loggerConfigEnvNames(source string) []string {

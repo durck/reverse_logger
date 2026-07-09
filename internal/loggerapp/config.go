@@ -13,18 +13,19 @@ import (
 )
 
 type Config struct {
-	ListenAddr       string
-	DataDir          string
-	WebhookToken     string
-	EdgeForwardToken string
-	EdgeHealthToken  string
-	DashboardToken   string
-	IngressWSPath    string
-	IngressPushPath  string
-	Correlation      store.CorrelationConfig
-	Dashboard        store.DashboardConfig
-	EdgeHealth       EdgeHealthConfig
-	Telegram         telegram.Config
+	ListenAddr           string
+	DataDir              string
+	WebhookToken         string
+	EdgeForwardToken     string
+	SessionSnapshotToken string
+	EdgeHealthToken      string
+	DashboardToken       string
+	IngressWSPath        string
+	IngressPushPath      string
+	Correlation          store.CorrelationConfig
+	Dashboard            store.DashboardConfig
+	EdgeHealth           EdgeHealthConfig
+	Telegram             telegram.Config
 }
 
 type EdgeHealthConfig struct {
@@ -50,15 +51,16 @@ func LoadConfig() (Config, error) {
 	correlation.EnableUniqueTimeFallback = parseBoolOrDefault(os.Getenv("CORRELATION_UNIQUE_TIME_FALLBACK_ENABLED"), correlation.EnableUniqueTimeFallback)
 
 	config := Config{
-		ListenAddr:       envOrDefault("LISTEN_ADDR", ":8080"),
-		DataDir:          envOrDefault("DATA_DIR", "/data"),
-		WebhookToken:     strings.TrimSpace(os.Getenv("WEBHOOK_TOKEN")),
-		EdgeForwardToken: strings.TrimSpace(os.Getenv("EDGE_FORWARD_TOKEN")),
-		EdgeHealthToken:  strings.TrimSpace(os.Getenv("EDGE_HEALTH_TOKEN")),
-		DashboardToken:   strings.TrimSpace(os.Getenv("DASHBOARD_TOKEN")),
-		IngressWSPath:    events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
-		IngressPushPath:  events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
-		Correlation:      correlation,
+		ListenAddr:           envOrDefault("LISTEN_ADDR", ":8080"),
+		DataDir:              envOrDefault("DATA_DIR", "/data"),
+		WebhookToken:         strings.TrimSpace(os.Getenv("WEBHOOK_TOKEN")),
+		EdgeForwardToken:     strings.TrimSpace(os.Getenv("EDGE_FORWARD_TOKEN")),
+		SessionSnapshotToken: strings.TrimSpace(os.Getenv("RSSH_SESSION_FORWARD_TOKEN")),
+		EdgeHealthToken:      strings.TrimSpace(os.Getenv("EDGE_HEALTH_TOKEN")),
+		DashboardToken:       strings.TrimSpace(os.Getenv("DASHBOARD_TOKEN")),
+		IngressWSPath:        events.NormalizeIngressPath(os.Getenv("INGRESS_WS_PATH"), events.DefaultWSPath),
+		IngressPushPath:      events.NormalizeIngressPath(os.Getenv("INGRESS_PUSH_PATH"), events.DefaultPushPath),
+		Correlation:          correlation,
 		Dashboard: store.DashboardConfig{
 			ActiveSessionMaxAge: parseDurationOrDefaultAllowZero(os.Getenv("DASHBOARD_ACTIVE_SESSION_MAX_AGE"), store.DefaultDashboardActiveSessionMaxAge),
 		},
