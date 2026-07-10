@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Show live snapshot IDs in `Active sessions` even when their lifecycle webhook
+  is missing, and surface those snapshot-only connections as reconciled rows in
+  `Recent sessions`.
 - Refresh architecture documentation for the session snapshot reconciler,
   `/session-snapshots`, active-session and timeline source-of-truth rules, and
   storage schema.

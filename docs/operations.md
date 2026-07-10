@@ -277,7 +277,10 @@ Dashboard shows stale active sessions:
 
 1. When `rssh-session-reconciler` is running, `Active sessions` is derived from
    the latest fresh `reverse_ssh ls` snapshot. Webhook rows remain an append-only
-   audit trail and are used for metadata, timeline peaks, and fallback.
+   audit trail and are used for metadata, timeline peaks, and fallback. A live
+   snapshot ID with no webhook metadata is still shown in `Active sessions` and
+   appears as a virtual `reconciled` row in `Recent sessions`; it is not inserted
+   into `enriched_events`.
 2. Without a fresh snapshot, the dashboard falls back to real `reverse_ssh`
    connect/disconnect webhooks. If a disconnect webhook is never delivered, the
    session is treated as active until it becomes stale.

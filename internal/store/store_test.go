@@ -489,6 +489,71 @@ func TestReconcileSessionSnapshotHidesMissingActiveSessionWithoutSyntheticEvent(
 	}
 }
 
+func TestDashboardShowsSnapshotOnlySessionsAsActiveAndRecent(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.SetDashboardConfig(DashboardConfig{ActiveSessionMaxAge: time.Hour})
+
+	now := time.Now().UTC()
+	if _, err := st.ReconcileSessionSnapshot([]string{"snapshot-only-one", "snapshot-only-two"}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	overview, err := st.DashboardOverview(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Totals.Active != 2 || len(overview.ActiveSessions) != 2 {
+		t.Fatalf("snapshot-only active sessions = %+v totals=%+v", overview.ActiveSessions, overview.Totals)
+	}
+	for _, event := range overview.ActiveSessions {
+		if event.Status != "connected" || !event.Synthetic || event.IngestSource != "reconciler" {
+			t.Fatalf("unexpected snapshot-only active event: %+v", event)
+		}
+	}
+
+	recent, err := st.DashboardEvents(context.Background(), DashboardEventQuery{Window: 24 * time.Hour, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 {
+		t.Fatalf("snapshot-only recent sessions = %+v", recent)
+	}
+	for _, event := range recent {
+		if event.Status != "connected" || !event.Synthetic || event.IngestReason != "live_snapshot" {
+			t.Fatalf("unexpected snapshot-only recent event: %+v", event)
+		}
+	}
+
+	filtered, err := st.DashboardEvents(context.Background(), DashboardEventQuery{
+		Window: 24 * time.Hour,
+		Status: "connected",
+		Search: "snapshot-only-one",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].ReverseSSHID != "snapshot-only-one" {
+		t.Fatalf("filtered snapshot-only recent sessions = %+v", filtered)
+	}
+
+	filtered, err = st.DashboardEvents(context.Background(), DashboardEventQuery{
+		Window: 24 * time.Hour,
+		Status: "disconnected",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("snapshot-only session ignored status filter: %+v", filtered)
+	}
+}
+
 func TestDashboardActiveSessionsUseLiveSnapshotOverSyntheticDisconnect(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {

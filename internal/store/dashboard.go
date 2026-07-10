@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -256,7 +257,80 @@ LIMIT ?`, args...)
 		}
 		events = append(events, event)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	activeSince := dashboardActiveSince(bounds, s.dashboard.ActiveSessionMaxAge)
+	snapshotID, ok, err := s.latestFreshSessionSnapshotID(ctx, activeSince)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		snapshotEvents, err := s.dashboardRecentSessionsFromSnapshot(ctx, snapshotID, bounds)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range snapshotEvents {
+			if dashboardEventMatchesQuery(event, query) {
+				events = append(events, event)
+			}
+		}
+	}
+
+	sort.SliceStable(events, func(i, j int) bool {
+		left, leftErr := time.Parse(time.RFC3339Nano, events[i].ReceivedAt)
+		right, rightErr := time.Parse(time.RFC3339Nano, events[j].ReceivedAt)
+		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+			return left.After(right)
+		}
+		if events[i].ReceivedAt != events[j].ReceivedAt {
+			return events[i].ReceivedAt > events[j].ReceivedAt
+		}
+		return events[i].ID > events[j].ID
+	})
+	if len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
+}
+
+func dashboardEventMatchesQuery(event DashboardEvent, query DashboardEventQuery) bool {
+	for _, filter := range [][2]string{
+		{event.Status, query.Status},
+		{event.CorrelationStatus, query.CorrelationStatus},
+		{event.Transport, query.Transport},
+	} {
+		value, expected := filter[0], filter[1]
+		if expected = strings.ToLower(strings.TrimSpace(expected)); expected != "" && strings.ToLower(strings.TrimSpace(value)) != expected {
+			return false
+		}
+	}
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	if search == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		event.ReverseSSHID,
+		event.HostName,
+		event.UserName,
+		event.ComputerName,
+		event.IPRaw,
+		event.IPAddr,
+		event.RealClientIP,
+		event.ProxySourceIP,
+		event.VPSName,
+		event.VPSPublicIP,
+		event.VPSInternalIP,
+		event.ForwarderIP,
+		event.IngestSource,
+		event.IngestReason,
+		event.IngressHost,
+	}, "\n"))
+	return strings.Contains(haystack, search)
 }
 
 func (s *Store) DashboardSystemEvents(ctx context.Context, query DashboardSystemEventQuery) ([]DashboardSystemEvent, error) {
@@ -671,29 +745,29 @@ LIMIT 1`
 func (s *Store) dashboardActiveSessionsFromSnapshot(ctx context.Context, snapshotID int64, limit int) ([]DashboardEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `
 WITH latest AS (
-	SELECT max(id) AS id
+	SELECT reverse_ssh_id, max(id) AS id
 	FROM enriched_events
 	WHERE reverse_ssh_id <> ''
 	  AND lower(coalesce(ingest_source, '')) <> 'reconciler'
 	GROUP BY reverse_ssh_id
 )
-SELECT ee.id, 'connected' AS status, ee.correlation_status, ee.correlation_method, ee.reverse_ssh_id,
-	ee.ingest_source, ee.ingest_reason, ee.synthetic, ee.host_name, ee.user_name,
+SELECT coalesce(ee.id, 0), 'connected' AS status,
+	coalesce(ee.correlation_status, 'unmatched'),
+	coalesce(ee.correlation_method, 'session-snapshot'), live.reverse_ssh_id,
+	CASE WHEN ee.id IS NULL THEN 'reconciler' ELSE ee.ingest_source END,
+	CASE WHEN ee.id IS NULL THEN 'live_snapshot' ELSE ee.ingest_reason END,
+	CASE WHEN ee.id IS NULL THEN 1 ELSE ee.synthetic END, ee.host_name, ee.user_name,
 	ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port, ee.real_client_ip,
 	ee.client_port, ee.transport, ee.public_key_fingerprint, ee.proxy_source_ip,
 	ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip, ee.forwarder_ip, ie.host,
-	ee.version, ee.received_at, ee.ingress_received_at
+	ee.version, coalesce(ee.received_at, snapshot.checked_at), ee.ingress_received_at
 FROM session_snapshot_live_ids live
-JOIN latest ON latest.id = (
-	SELECT max(id)
-	FROM enriched_events candidate
-	WHERE candidate.reverse_ssh_id = live.reverse_ssh_id
-	  AND lower(coalesce(candidate.ingest_source, '')) <> 'reconciler'
-)
-JOIN enriched_events ee ON ee.id = latest.id
+JOIN session_snapshots snapshot ON snapshot.id = live.snapshot_id
+LEFT JOIN latest ON latest.reverse_ssh_id = live.reverse_ssh_id
+LEFT JOIN enriched_events ee ON ee.id = latest.id
 LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
 WHERE live.snapshot_id = ?
-ORDER BY ee.received_at DESC, ee.id DESC
+ORDER BY coalesce(ee.received_at, snapshot.checked_at) DESC, ee.id DESC, live.reverse_ssh_id ASC
 LIMIT ?`, snapshotID, limit)
 	if err != nil {
 		return nil, err
@@ -716,14 +790,53 @@ func (s *Store) dashboardActiveSessionCountFromSnapshot(ctx context.Context, sna
 	err := s.db.QueryRowContext(ctx, `
 SELECT count(*)
 FROM session_snapshot_live_ids live
-WHERE live.snapshot_id = ?
-  AND EXISTS (
-	SELECT 1
-	FROM enriched_events ee
-	WHERE ee.reverse_ssh_id = live.reverse_ssh_id
-	  AND lower(coalesce(ee.ingest_source, '')) <> 'reconciler'
-  )`, snapshotID).Scan(&count)
+WHERE live.snapshot_id = ?`, snapshotID).Scan(&count)
 	return count, err
+}
+
+func (s *Store) dashboardRecentSessionsFromSnapshot(ctx context.Context, snapshotID int64, bounds dashboardTimeBounds) ([]DashboardEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH latest AS (
+	SELECT reverse_ssh_id, max(id) AS id
+	FROM enriched_events
+	WHERE reverse_ssh_id <> ''
+	  AND lower(coalesce(ingest_source, '')) <> 'reconciler'
+	GROUP BY reverse_ssh_id
+)
+SELECT 0, 'connected', 'unmatched', 'session-snapshot', live.reverse_ssh_id,
+	'reconciler', 'live_snapshot', 1, ee.host_name, ee.user_name,
+	ee.computer_name, ee.ip_raw, ee.ip_addr, ee.ip_port, ee.real_client_ip,
+	ee.client_port, ee.transport, ee.public_key_fingerprint, ee.proxy_source_ip,
+	ee.vps_name, ee.vps_public_ip, ee.vps_internal_ip, ee.forwarder_ip, ie.host,
+	ee.version, snapshot.checked_at, ee.ingress_received_at
+FROM session_snapshot_live_ids live
+JOIN session_snapshots snapshot ON snapshot.id = live.snapshot_id
+LEFT JOIN latest ON latest.reverse_ssh_id = live.reverse_ssh_id
+LEFT JOIN enriched_events ee ON ee.id = latest.id
+LEFT JOIN ingress_events ie ON ie.event_hash = ee.ingress_event_hash
+WHERE live.snapshot_id = ?
+  AND snapshot.checked_at BETWEEN ? AND ?
+  AND NOT EXISTS (
+	SELECT 1
+	FROM enriched_events recent
+	WHERE recent.reverse_ssh_id = live.reverse_ssh_id
+	  AND recent.received_at BETWEEN ? AND ?
+  )
+ORDER BY live.reverse_ssh_id ASC`, snapshotID, bounds.since, bounds.until, bounds.since, bounds.until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]DashboardEvent, 0)
+	for rows.Next() {
+		event, err := scanDashboardEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
 }
 
 func (s *Store) applyActiveTimeline(ctx context.Context, bounds dashboardTimeBounds, timeline []DashboardTimelineBucket, step time.Duration, layout string) error {

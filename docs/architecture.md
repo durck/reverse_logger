@@ -388,7 +388,7 @@ continues to report.
 flowchart LR
     Browser["Browser with DASHBOARD_TOKEN"] -->|"GET /dashboard/"| Logger["rssh-logger"]
     Browser -->|"GET /dashboard/api/overview"| Overview["DashboardOverview"]
-    Browser -->|"GET /dashboard/api/events"| Events["enriched_events query"]
+    Browser -->|"GET /dashboard/api/events"| Events["enriched_events + current snapshot-only sessions"]
     Browser -->|"GET /dashboard/api/system-events"| System["ingress + reverse_ssh_errors union"]
     Browser -->|"GET /dashboard/api/edge-health"| Health["edge health overview"]
     Logger --> DB["events.db"]
@@ -400,10 +400,14 @@ flowchart LR
 
 Dashboard pages are embedded in the `rssh-logger` binary and are available only
 when `DASHBOARD_TOKEN` is non-empty. `Recent sessions` is read from
-`enriched_events`; `Active sessions` prefers the latest fresh
-`session_snapshots` row and falls back to lifecycle webhooks when no fresh
-snapshot exists. Timeline buckets expose both a lifecycle-derived active peak
-and an end-of-bucket active value; fresh snapshots override only the end value.
+`enriched_events` and adds virtual `reconciled` rows for live IDs in the latest
+fresh snapshot that have no lifecycle event in the selected window. These rows
+are not written back to the append-only lifecycle journal. `Active sessions`
+prefers the latest fresh `session_snapshots` row, includes snapshot IDs even
+when no `enriched_events` metadata exists, and falls back to lifecycle webhooks
+when no fresh snapshot exists. Timeline buckets expose both a lifecycle-derived
+active peak and an end-of-bucket active value; fresh snapshots override only the
+end value.
 
 ## Correlation Model
 
