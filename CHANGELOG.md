@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add a prioritized Russian development roadmap and a full Ansible optimization
+  review; clarify current systemd, credential, transport, retention, and
+  partial-playbook limitations across the runbooks.
 - Document private Docker-DNS webhook registration, Compose override and
   environment precedence, token rotation, UFW rule ordering, Docker
   `DOCKER-USER` guards, and main-server firewall review practices.

@@ -309,7 +309,9 @@ Dashboard not reachable:
 2. A `401` means the dashboard is enabled but the browser/API did not send the
    correct token. Browser password is `DASHBOARD_TOKEN`; curl may use
    `Authorization: Bearer <DASHBOARD_TOKEN>`.
-3. Confirm the port is published with `docker compose ps`. Host access requires
+3. Confirm the port is published with
+   `docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml ps`.
+   Host access requires
    `docker-compose.edge-forward.yml`; inside the Compose network, use
    `http://rssh-logger:8080/dashboard/`.
 4. If `LOGGER_BIND_IP` is not `127.0.0.1`, confirm firewall allowlists include
@@ -366,7 +368,9 @@ No Telegram alert:
    prove the bot can write to that chat. Use a temporary `curl --config` file
    as shown in `telegram-proxy.md` so tokens and proxy credentials are not
    exposed in process arguments.
-9. Check `docker compose logs rssh-logger` and
+9. Check
+   `docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml logs rssh-logger`
+   and
    `journalctl -u rssh-error-forwarder -n 100 --no-pager`.
 
 No VPS health alert:

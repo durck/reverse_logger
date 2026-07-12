@@ -591,6 +591,11 @@ Central durable files under `LOGGER_DATA_DIR`:
 Session snapshots are SQLite-only. They update dashboard active-state reads but
 do not append JSONL lifecycle events.
 
+There is currently no automatic retention or compaction policy for SQLite or
+JSONL. Operators must monitor disk growth and perform tested backups; a managed
+retention policy is tracked in the
+[development roadmap](development-roadmap.md).
+
 VPS durable or diagnostic files:
 
 | File | Purpose |
@@ -713,10 +718,16 @@ Security invariants:
 - `DASHBOARD_TOKEN` enables a read-only dashboard, but it is still sensitive
   because it exposes connection metadata.
 - The reconciler private key is mounted read-only from
-  `RSSH_SESSION_CONSOLE_KEY_PATH`. It should authorize only the internal
-  console access needed for `ls`.
+  `RSSH_SESSION_CONSOLE_KEY_PATH` and is used only for console `ls` by the
+  sidecar. The repository does not prove a command-level RBAC restriction in
+  reverse_ssh, so the key must currently be handled as a console-administrator
+  credential. A dedicated read-only interface is the target design.
 - `EDGE_FORWARD_TOKEN` and `EDGE_HEALTH_TOKEN` should be separate so ingress
   forwarding and health reporting can be rotated independently.
+- Edge forwarding and health URLs may use HTTP only across an encrypted,
+  isolated private route. For any public or untrusted transit network, require
+  HTTPS with CA verification (preferably mTLS); bearer/path tokens do not
+  provide transport confidentiality.
 - Real hostnames, IP allocations, VPN topology, DNAT state, and generated random
   paths belong in private operational state, not in this repository.
 

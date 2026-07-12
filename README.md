@@ -42,6 +42,8 @@ Start with:
 - [Manual deployment](docs/manual-deploy.md)
 - [Operations](docs/operations.md)
 - [Management brief (RU)](docs/management-brief-ru.md)
+- [Development roadmap (RU)](docs/development-roadmap.md)
+- [Ansible review (RU)](docs/ansible-review.md)
 
 Focused guides:
 

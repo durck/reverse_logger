@@ -8,6 +8,8 @@ specific deployment step.
 
 | Document | Purpose |
 | --- | --- |
+| [Development roadmap (RU)](development-roadmap.md) | Приоритизированный план развития по безопасности, надежности, данным, IaC, CI/CD и документации. |
+| [Ansible review (RU)](ansible-review.md) | Результаты полного аудита playbooks и поэтапный план оптимизации. |
 | [Architecture](architecture.md) | Component map, network surfaces, data flows, correlation rules, storage model, and trust boundaries. |
 | [Manual deployment](manual-deploy.md) | End-to-end clean Ubuntu deployment for main and VPS hosts. |
 | [Operations](operations.md) | Health checks, durable logs, backup list, and troubleshooting. |
@@ -30,3 +32,5 @@ specific deployment step.
    backup, and troubleshooting.
 4. Use the focused documents for the subsystem you are changing: nginx,
    webhook, SoftEther/DNAT, Telegram proxy, or Terraform provisioning.
+5. Use the [development roadmap](development-roadmap.md) for planned work and
+   the [Ansible review](ansible-review.md) before changing deployment automation.

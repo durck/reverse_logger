@@ -123,9 +123,11 @@ cat ~/.ssh/reverse_ssh_operator.pub
 Keep the private key in your local `~/.ssh/` or a vault. Put only the single
 public key line into `SEED_AUTHORIZED_KEYS`.
 
-Generate a separate SSH key for the Docker session reconciler. This key is used
-only by the `rssh-session-reconciler` sidecar to run `ls` against the internal
-`reverse_ssh` console:
+Generate a separate SSH key for the Docker session reconciler. The sidecar uses
+it operationally only to run `ls` against the internal `reverse_ssh` console.
+This is not a command-level security restriction: unless reverse_ssh itself is
+configured with an independently verified forced-command/RBAC control, treat
+the private key as a console-administrator credential and protect it accordingly:
 
 ```sh
 sudo install -d -m 0750 /opt/reverse-logger/secrets
@@ -1205,13 +1207,35 @@ For the raw DNAT fallback:
 
 ## 15. Optional systemd Installation
 
-After manual validation:
+The repository unit currently invokes only the base `docker-compose.yml`. Do
+not enable it unchanged when the deployment uses
+`docker-compose.edge-forward.yml`: start and stop must use the same complete
+Compose file set or the published logger port and service lifecycle can differ
+from the manual deployment.
+
+After manual validation, install the unit and add an override that replaces
+both commands:
 
 ```sh
 sudo cp deploy/systemd/rssh-monitor.service /etc/systemd/system/rssh-monitor.service
+sudo mkdir -p /etc/systemd/system/rssh-monitor.service.d
+sudo tee /etc/systemd/system/rssh-monitor.service.d/compose-files.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
+ExecStop=
+ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml down
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable rssh-monitor
 sudo systemctl start rssh-monitor
+```
+
+Verify the effective commands before enabling the service:
+
+```sh
+systemctl cat rssh-monitor
+systemctl show rssh-monitor -p ExecStart -p ExecStop
 ```
 
 Optional failed-attempt journal forwarding from the main host:
@@ -1231,6 +1255,11 @@ Set `RSSH_ERROR_FORWARD_URL` to the main logger
 the central logger. For Docker-based `reverse_ssh`, set
 `RSSH_JOURNAL_COMMAND=docker logs -f --since=0s reverse_ssh`.
 
+The current error forwarder has no durable cursor or disk spool. Lines emitted
+while it is stopped and POSTs that fail after reading a line are not guaranteed
+to be replayed. Treat this stream as diagnostic until the durable-forwarding
+work in the [development roadmap](development-roadmap.md) is complete.
+
 Check:
 
 ```sh
@@ -1246,7 +1275,7 @@ Main server:
 
 ```sh
 cd /opt/reverse-logger
-docker compose down
+docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml down
 sudo systemctl disable --now rssh-monitor || true
 ```
 

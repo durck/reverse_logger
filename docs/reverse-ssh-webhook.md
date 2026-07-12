@@ -49,6 +49,11 @@ reverse_ssh container -> http://rssh-logger:8080/hooks/<token>
 VPS forwarder         -> http://<main-bind-ip>:8080/ingress-events/<token>
 ```
 
+The VPS-to-main HTTP example assumes an encrypted, isolated private route. If
+that traffic crosses an untrusted or public network, use HTTPS with CA
+verification (preferably mTLS); the URL/bearer token authenticates a request but
+does not encrypt it.
+
 Confirm private reachability from the actual caller container:
 
 ```sh

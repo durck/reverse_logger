@@ -32,6 +32,11 @@ address or DNS name, set `edge_health_vpn_iface: ""`, and set
 `edge_health_local_services: []` when edge health should only verify main port
 and logger endpoint availability.
 
+The generated forwarder and health URLs are HTTP by default. A public
+`main_internal_ip` therefore requires an independently encrypted tunnel or an
+explicit HTTPS/mTLS design; an allowlist and bearer token alone do not encrypt
+the reports. Do not send these endpoints in cleartext across the Internet.
+
 ## Multi-VPS layout
 
 ```text
@@ -503,9 +508,13 @@ uses the first reachable module proxy. If none of the HTTP proxies respond, it
 falls back to `direct` only when the configured direct origin hosts resolve from
 the target.
 
-The module download uses the committed `go.sum`; set
-`reverse_logger_go_sumdb` back to a checksum database if the target environment
-should verify modules online. `reverse_logger_go_download_trace` enables
+The committed `go.sum` does not replace online checksum-database verification:
+`reverse_logger_go_sumdb: "off"` is a compatibility setting for restricted
+networks and weakens the production supply chain. Prefer `sum.golang.org` or a
+trusted internal checksum database, and make `off` an explicit emergency
+override. The target design is to build once in CI and deploy an immutable,
+checksummed artifact; see the [Ansible review](../../docs/ansible-review.md).
+`reverse_logger_go_download_trace` enables
 `go mod download -x` for useful failure diagnostics. Ansible cannot display a
 byte-level Go download progress bar, but the async timeout/poll settings make
 long downloads show periodic polling instead of a silent task. The default
@@ -516,6 +525,11 @@ At the start of the playbook, `nginx_edge_fix_resolv_conf` points
 `/etc/resolv.conf` at the systemd-resolved runtime file. This is equivalent to
 `ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf` and keeps later
 Snap/Go/apt DNS checks on the same resolver path.
+
+This setting changes host-wide DNS state and assumes systemd-resolved owns the
+resolver. Validate that assumption on the target image; set it to `false` for
+NetworkManager, cloud-init-managed, containerized, or otherwise different DNS
+layouts. Changing the default to opt-in is tracked in the Ansible review.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a
@@ -547,6 +561,9 @@ To retry just Certbot bootstrap after a Snap Store or DNS flake:
 ansible-playbook vps-edge.yml --limit edge1 --tags snap
 ```
 
+Like other partial tags, this command is for an already provisioned host. It is
+not a supported clean-host installation path.
+
 ACME retries are intentionally conservative because repeated real validation
 failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 `80/tcp`, or DNS-provider credentials before increasing `nginx_edge_acme_retries`.
@@ -563,6 +580,11 @@ failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 | `vps_public_ip` | `ansible_host` |
 | `vps_internal_ip` | optional `/edge/source-ip` response from main logger |
 | `nginx_edge_acme_email` | `admin@<rssh_domain>` |
+
+The HTTP defaults in this table assume the VPS-to-main path is private and
+encrypted. Override them with verified HTTPS endpoints for untrusted transit.
+For production, also pin `reverse_logger_repo_version` to a reviewed immutable
+tag or commit instead of following `main`.
 
 ## Run
 
@@ -599,8 +621,10 @@ node registration:
 ansible-playbook -i inventory.yml vps-edge.yml --tags edge_health
 ```
 
-This health-only path does not run ACME or Timeweb DNS tasks, so it does not
-require the vault password used for certificate automation.
+This is an **incremental update for an already provisioned VPS**, not a
+fresh-host installation. Untagged OS/package prerequisites are intentionally
+skipped. The health-only path does not run ACME or Timeweb DNS tasks, so it does
+not require the vault password used for certificate automation.
 
 From repo root:
 
