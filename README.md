@@ -41,12 +41,14 @@ Start with:
 - [Architecture](docs/architecture.md)
 - [Manual deployment](docs/manual-deploy.md)
 - [Operations](docs/operations.md)
+- [Management brief (RU)](docs/management-brief-ru.md)
 
 Focused guides:
 
 - [Nginx WSS/HTTPS VPS entrypoint](docs/nginx-wss-https-entrypoint.md)
 - [reverse_ssh webhook](docs/reverse-ssh-webhook.md)
 - [SoftEther/DNAT fallback](docs/softether-entrypoint.md)
+- [Main server firewall](docs/firewall.md)
 - [Telegram proxy](docs/telegram-proxy.md)
 - [Automated nginx edge rollout](deploy/ansible/README.md)
 

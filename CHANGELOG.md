@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Document private Docker-DNS webhook registration, Compose override and
+  environment precedence, token rotation, UFW rule ordering, Docker
+  `DOCKER-USER` guards, and main-server firewall review practices.
+- Add a Russian management brief explaining reverse tunnels, VPS/nginx proxy
+  flow, three-source observability, security controls, and likely review
+  questions.
 - Show live snapshot IDs in `Active sessions` even when their lifecycle webhook
   is missing, and surface those snapshot-only connections as reconciled rows in
   `Recent sessions`.

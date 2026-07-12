@@ -59,9 +59,38 @@ If `LOGGER_BIND_IP=127.0.0.1`, open the page through an SSH tunnel.
 Compose:
 
 ```sh
-docker compose ps
-docker compose logs --tail=100 rssh-logger
-docker compose logs --tail=100 reverse_ssh
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.edge-forward.yml \
+  ps
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.edge-forward.yml \
+  logs --tail=100 rssh-logger reverse_ssh rssh-session-reconciler
+```
+
+Use the same ordered file set for `config`, `up`, `ps`, `logs`, `restart`, and
+`down`. The edge override is not auto-loaded: omitting it during a recreate
+removes the host publication of logger port `8080` and stops VPS ingress/health
+delivery. See [Main Server Firewall](firewall.md) before exposing that port.
+
+Shell environment variables override `.env` interpolation, even when
+`--env-file .env` is specified. `set +a` only stops future automatic exports;
+it does not unset values already loaded into the current shell. To run Compose
+using the current file values without mutating the parent shell:
+
+```sh
+(
+  while IFS= read -r name; do
+    unset "$name"
+  done < <(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' .env)
+
+  docker compose \
+    --env-file .env \
+    -f docker-compose.yml \
+    -f docker-compose.edge-forward.yml \
+    config --environment
+)
 ```
 
 systemd:
@@ -255,9 +284,23 @@ Generated clients fail with `Unable to connect WS: bad status`:
 
 Webhook not received:
 
-1. Check `webhook -l` inside `reverse_ssh`.
-2. Confirm `http://rssh-logger:8080/healthz` works inside the Compose network.
-3. Confirm `WEBHOOK_TOKEN` in `.env` matches the registered webhook URL.
+1. Check `webhook -l` inside `reverse_ssh`, especially after recreating that
+   container. Registration may be runtime state.
+2. The registered lifecycle URL must be
+   `http://rssh-logger:8080/hooks/<WEBHOOK_TOKEN>`, never the main server's
+   public/host-published address.
+3. From the actual caller container, confirm private reachability:
+
+```sh
+docker compose exec reverse_ssh sh -lc \
+  'wget -qO- http://rssh-logger:8080/healthz || curl -fsS http://rssh-logger:8080/healthz'
+```
+
+4. Confirm `WEBHOOK_TOKEN` in `.env` matches the registered webhook URL. If a
+   token appeared in a screenshot or log, rotate it rather than reusing it.
+5. Compare recent `events`, `ingress_events`, and `session_snapshots`. Ingress
+   plus `live=1` without a new `events` row is a missing webhook, not a matcher
+   failure. Fully reconnect the test agent after fixing registration.
 
 Dashboard not reachable:
 

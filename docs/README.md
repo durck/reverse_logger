@@ -11,9 +11,11 @@ specific deployment step.
 | [Architecture](architecture.md) | Component map, network surfaces, data flows, correlation rules, storage model, and trust boundaries. |
 | [Manual deployment](manual-deploy.md) | End-to-end clean Ubuntu deployment for main and VPS hosts. |
 | [Operations](operations.md) | Health checks, durable logs, backup list, and troubleshooting. |
+| [Management brief (RU)](management-brief-ru.md) | Краткое описание reverse tunnel, proxy flow, мониторинга, безопасности и типовых вопросов руководства. |
 | [Nginx WSS/HTTPS entrypoint](nginx-wss-https-entrypoint.md) | Public VPS nginx transport, mirror capture, downloads, TLS, and forwarder behavior. |
 | [reverse_ssh webhook](reverse-ssh-webhook.md) | Webhook registration, payload shapes, event normalization, and failed-attempt forwarding. |
 | [SoftEther entrypoint](softether-entrypoint.md) | Raw DNAT/SNAT fallback notes. |
+| [Main server firewall](firewall.md) | UFW allowlists, Docker `DOCKER-USER` guard, safe rule ordering, audits, and VPS lifecycle changes. |
 | [Telegram proxy](telegram-proxy.md) | Squid proxy example and Telegram smoke tests. |
 | [Ansible VPS edge](../deploy/ansible/README.md) | Automated VPS edge rollout and generated client links. |
 | [Timeweb edge Terraform](../deploy/terraform/timeweb-edge/README.md) | Optional VPS provisioning helpers. |

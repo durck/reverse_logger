@@ -157,6 +157,10 @@ the normal nginx WSS/HTTPS path.
 Do not expose the central `/dashboard` or `/dashboard/api/*` routes through the
 public VPS nginx entrypoint. Use `LOGGER_BIND_IP=127.0.0.1` plus SSH tunneling,
 or bind to a private interface and firewall it to operator/VPS sources.
+Docker-published ports must also be guarded in `DOCKER-USER`; see
+`docs/firewall.md`. The `reverse_ssh` lifecycle webhook never needs the
+host-published logger address and must use `rssh-logger:8080` on the Compose
+network.
 
 ## Central Logger HTTP API
 
@@ -695,6 +699,11 @@ Security invariants:
   transport/download paths.
 - The logger and dashboard are private services. They are not part of the
   public nginx route.
+- The lifecycle webhook uses `http://rssh-logger:8080` on the private Compose
+  network. Public-IP or host-published webhook URLs are forbidden because
+  firewall and hairpin-routing behavior can silently prevent delivery.
+- UFW host rules and the managed `DOCKER-USER` guard are reviewed together for
+  Docker-published ports. Rules must not depend on generated `br-<hash>` names.
 - Nginx overwrites `X-Real-IP` and `X-Forwarded-For` with `$remote_addr` before
   proxying to `reverse_ssh`. Do not use `$proxy_add_x_forwarded_for` on this
   path.
@@ -719,6 +728,7 @@ Security invariants:
 | Day-2 health checks, backup, troubleshooting | `docs/operations.md` |
 | VPS nginx WSS/HTTPS endpoint details | `docs/nginx-wss-https-entrypoint.md` |
 | Webhook payloads and registration | `docs/reverse-ssh-webhook.md` |
+| Main UFW and Docker firewall policy | `docs/firewall.md` |
 | Raw DNAT and SoftEther notes | `docs/softether-entrypoint.md` |
 | Telegram proxy and smoke tests | `docs/telegram-proxy.md` |
 | Automated VPS rollout | `deploy/ansible/README.md` |

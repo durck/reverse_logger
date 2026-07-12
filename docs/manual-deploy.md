@@ -276,8 +276,40 @@ reachable inside the Docker network and the VPS `nginx-edge-forwarder` cannot
 POST ingress events to it:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.edge-forward.yml up -d
-docker compose ps
+docker compose \
+  --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.edge-forward.yml \
+  up -d
+docker compose \
+  --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.edge-forward.yml \
+  ps
+```
+
+Keep this exact ordered file set for later `config`, `up`, `ps`, `logs`,
+`restart`, and `down` operations. `docker-compose.edge-forward.yml` is not an
+automatically loaded override. Recreating `rssh-logger` with only the base file
+removes its host port publication and breaks VPS ingress/health delivery.
+
+Current shell variables take precedence over `.env`, including with
+`--env-file .env`. If `.env` was previously sourced with `set -a`, either open
+a fresh shell or unset the project variables before Compose interpolation.
+`set +a` alone does not unset them. A parent-shell-safe check is:
+
+```bash
+(
+  while IFS= read -r name; do
+    unset "$name"
+  done < <(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' .env)
+
+  docker compose \
+    --env-file .env \
+    -f docker-compose.yml \
+    -f docker-compose.edge-forward.yml \
+    config --environment
+)
 ```
 
 This publishes `rssh-logger` on `LOGGER_BIND_IP:LOGGER_BIND_PORT`:
@@ -407,7 +439,24 @@ webhook --on http://rssh-logger:8080/hooks/<WEBHOOK_TOKEN>
 webhook -l
 ```
 
-Use the exact token from `.env`.
+Use the exact token from `.env`. The lifecycle URL must use private Docker DNS
+and the container port. Do not replace it with
+`http://<main-public-ip>:8080/hooks/...`: that host-published path is for VPS
+forwarders and may fail from a sibling container because of firewall or
+hairpin-routing policy.
+
+Verify reachability from the actual caller:
+
+```sh
+docker compose exec reverse_ssh sh -lc \
+  'wget -qO- http://rssh-logger:8080/healthz || curl -fsS http://rssh-logger:8080/healthz'
+```
+
+Run `webhook -l` after every `reverse_ssh` container/image replacement. Treat
+the registration as runtime state unless that deployed `reverse_ssh` version
+explicitly guarantees persistence. Redact the URL token from screenshots; if
+it is disclosed, rotate `WEBHOOK_TOKEN`, force-recreate `rssh-logger` with both
+Compose files, and replace the registered URL.
 
 ## 7. VPS Base Bootstrap
 
@@ -787,6 +836,17 @@ that network also carries traffic from untrusted sources. This is not a
 SoftEther interface on the main server; it is the normal interface where the
 VPS-routed traffic arrives.
 
+First read [Main Server Firewall](firewall.md). Docker-published ports may
+traverse `DOCKER-USER`, so a UFW `INPUT` allowlist alone is not a complete
+Docker boundary. Conversely, do not add UFW rules for generated `br-<hash>`
+interfaces: Compose bridge names can change and the internal webhook does not
+use the host-published port.
+
+The provided `main-firewall.sh` ends its managed chain with an unconditional
+drop. Use it only on a dedicated ingress interface. If the same interface also
+carries administrative SSH or other services, use the port-scoped
+`DOCKER-USER` pattern in `docs/firewall.md` instead.
+
 In the raw DNAT-only path, do not set a source allowlist here: the main server
 sees the real internet client IP, not the VPS VPN IP. In the nginx WSS/HTTPS
 path, the backend sees trusted nginx proxy headers only when
@@ -797,6 +857,9 @@ sudo env \
   INGRESS_IFACE=eth0 \
   REVERSE_SSH_BIND_IP=192.0.2.10 \
   REVERSE_SSH_PORT=3232 \
+  LOGGER_BIND_IP=192.0.2.10 \
+  LOGGER_BIND_PORT=8080 \
+  ALLOWED_SOURCE_IPS='<vps-1-ip> <vps-2-ip>' \
   sh /opt/reverse-logger/deploy/iptables/main-firewall.sh
 ```
 
@@ -807,6 +870,19 @@ so the same path may also reach the central logger. If VPS forwarding uses
 source addresses. If dashboard access uses the same interface, include only
 your operator IP/VPN source plus the VPS edge sources that need
 `/ingress-events`.
+
+With UFW, insert future VPS allow rules before existing terminal denies. A
+plain appended `ufw allow` may be shadowed by an earlier deny:
+
+```sh
+sudo ufw insert 1 allow proto tcp \
+  from <new-vps-ip> to <main-bind-ip> port <reverse-ssh-host-port> \
+  comment 'reverse_ssh from new VPS edge'
+sudo ufw insert 1 allow proto tcp \
+  from <new-vps-ip> to <main-bind-ip> port 8080 \
+  comment 'logger ingest from new VPS edge'
+sudo ufw status numbered
+```
 
 Verify after applying:
 
@@ -945,8 +1021,15 @@ INGRESS_PUSH_PATH=/rssh-push
 Then recreate the listener:
 
 ```sh
-docker compose up -d --force-recreate reverse_ssh rssh-logger
+docker compose \
+  --env-file .env \
+  -f docker-compose.yml \
+  -f docker-compose.edge-forward.yml \
+  up -d --force-recreate reverse_ssh rssh-logger
 ```
+
+Recheck `webhook -l` after recreating `reverse_ssh` and restore the private
+`http://rssh-logger:8080/hooks/<WEBHOOK_TOKEN>` registration if needed.
 
 Use the same values in `link`:
 
@@ -1099,7 +1182,9 @@ For nginx WSS/HTTPS:
 1. Confirm `https://<rssh_domain>/not-a-transport-path` redirects to
    `redirect_target`.
 2. Generate and run a WSS or HTTPS polling client from step 12.
-3. Confirm the reverse_ssh webhook event arrives.
+3. Confirm the reverse_ssh webhook event arrives. An ingress row plus a
+   reconciler `live=1` snapshot without a new row in `events` means webhook
+   delivery failed; it is not an ingress matcher failure.
 4. Check central ingress and enriched logs:
 
 ```sh
