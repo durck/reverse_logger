@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Add a scalable one-command Ansible edge rollout with controller-built,
+  checksum-verified artifacts, canary/25%/remainder batches, service and public
+  health gates, active/previous release manifests, rollback, deployment locking,
+  and link publication only after full fleet success.
+- Speed up idempotent VPS edge reruns with per-binary source commit markers,
+  add canary/batched rollout and ACME throttling, retry health registration,
+  flush validated service handlers before late checks, and adopt safer Go
+  checksum, resolver, fact-gathering, and download-trace defaults.
 - Add a prioritized Russian development roadmap and a full Ansible optimization
   review; clarify current systemd, credential, transport, retention, and
   partial-playbook limitations across the runbooks.

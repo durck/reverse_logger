@@ -1,0 +1,63 @@
+---
+- name: Validate effective nginx configuration after service activation
+  ansible.builtin.command:
+    argv:
+      - nginx
+      - -t
+  changed_when: false
+
+- name: Resolve required edge services
+  ansible.builtin.set_fact:
+    edge_verify_required_services: >-
+      {{
+        ['nginx', 'nginx-edge-forwarder']
+        + (edge_verify_health_service_enabled | bool | ternary(['edge-health'], []))
+      }}
+
+- name: Wait for required edge services to become active
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - "{{ item }}"
+  loop: "{{ edge_verify_required_services }}"
+  loop_control:
+    label: "{{ item }}"
+  register: edge_verify_service_state
+  changed_when: false
+  until: edge_verify_service_state.stdout | trim == 'active'
+  retries: "{{ edge_verify_retries | int }}"
+  delay: "{{ edge_verify_delay | int }}"
+
+- name: Wait for local HTTPS listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 443
+    timeout: 10
+    connect_timeout: 2
+    state: started
+
+- name: Wait for local nginx edge forwarder listener
+  ansible.builtin.wait_for:
+    host: "{{ edge_verify_forwarder_listen_addr | regex_replace(':[0-9]+$', '') }}"
+    port: "{{ edge_verify_forwarder_listen_addr | regex_replace('^.*:', '') | int }}"
+    timeout: 10
+    connect_timeout: 2
+    state: started
+
+- name: Probe public HTTPS edge from the controller
+  ansible.builtin.uri:
+    url: "https://{{ rssh_domain }}/"
+    method: GET
+    follow_redirects: none
+    validate_certs: "{{ edge_verify_public_validate_certs | bool }}"
+    status_code: "{{ edge_verify_public_status_codes }}"
+    timeout: 10
+  delegate_to: localhost
+  become: false
+  register: edge_verify_public_probe
+  changed_when: false
+  until: edge_verify_public_probe.status | default(0) in edge_verify_public_status_codes
+  retries: "{{ edge_verify_retries | int }}"
+  delay: "{{ edge_verify_delay | int }}"
+  when: edge_verify_public_https | bool

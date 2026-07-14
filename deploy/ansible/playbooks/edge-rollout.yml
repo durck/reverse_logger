@@ -1,0 +1,39 @@
+---
+- name: Build immutable edge artifacts once on the controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  pre_tasks:
+    - name: Reject unsupported full deployment check mode
+      ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+        fail_msg: >-
+          Full edge deployment does not support --check because certificate,
+          service-health, and control-plane registration tasks require real
+          state. Use --syntax-check and a disposable inventory instead.
+        quiet: true
+  vars:
+    reverse_logger_artifact_build_source_dir: "{{ playbook_dir }}/../../.."
+    reverse_logger_artifact_build_cache_dir: "{{ playbook_dir }}/../.artifacts"
+    reverse_logger_artifact_build_architectures: >-
+      {{
+        (
+          groups['vps_edge']
+          | default([])
+          | map('extract', hostvars, 'reverse_logger_artifact_goarch')
+          | select('defined')
+          | unique
+          | list
+        )
+        or ['amd64']
+      }}
+  roles:
+    - role: reverse_logger_artifact_build
+      tags:
+        - always
+
+- name: Roll out controller artifacts to VPS edges
+  import_playbook: ../vps-edge.yml
+  vars:
+    reverse_logger_install_mode: controller_artifact

@@ -1,0 +1,78 @@
+---
+- name: Validate controller artifact build inputs
+  ansible.builtin.assert:
+    that:
+      - reverse_logger_artifact_build_source_dir | length > 0
+      - reverse_logger_artifact_build_cache_dir | length > 0
+      - reverse_logger_artifact_build_architectures | length > 0
+      - reverse_logger_artifact_build_architectures | difference(['amd64', 'arm64']) | length == 0
+    fail_msg: >-
+      Set source/cache directories and use supported Linux architectures:
+      amd64 and/or arm64.
+    quiet: true
+
+- name: Resolve controller source revision
+  ansible.builtin.command:
+    argv:
+      - git
+      - rev-parse
+      - --verify
+      - HEAD
+  args:
+    chdir: "{{ reverse_logger_artifact_build_source_dir }}"
+  register: reverse_logger_artifact_build_git_revision
+  changed_when: false
+
+- name: Inspect controller Go build input changes
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'git',
+          'status',
+          '--porcelain',
+          '--untracked-files=normal',
+          '--'
+        ]
+        + reverse_logger_artifact_build_source_paths
+      }}
+  args:
+    chdir: "{{ reverse_logger_artifact_build_source_dir }}"
+  register: reverse_logger_artifact_build_git_status
+  changed_when: false
+
+- name: Require an immutable controller source tree
+  ansible.builtin.assert:
+    that:
+      - >-
+        reverse_logger_artifact_build_allow_dirty_source | bool
+        or (reverse_logger_artifact_build_git_status.stdout | trim | length) == 0
+    fail_msg: >-
+      The controller Go build inputs have tracked or untracked changes. Commit
+      or stash them so the artifact maps to an immutable revision, or set
+      reverse_logger_artifact_build_allow_dirty_source=true for a development
+      build.
+    quiet: true
+
+- name: Publish resolved artifact build facts
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_build_version: >-
+      {{
+        (reverse_logger_artifact_build_git_revision.stdout | trim)
+        ~ (
+          '-dirty-'
+          ~ now(utc=true, fmt='%Y%m%d%H%M%S%f')
+          if (reverse_logger_artifact_build_git_status.stdout | trim | length) > 0
+          else ''
+        )
+      }}
+    reverse_logger_artifact_build_cache_dir_resolved: "{{ reverse_logger_artifact_build_cache_dir }}"
+    reverse_logger_artifact_build_source_dir_resolved: "{{ reverse_logger_artifact_build_source_dir }}"
+    reverse_logger_artifact_build_architectures_resolved: "{{ reverse_logger_artifact_build_architectures | unique | list }}"
+
+- name: Build each requested controller artifact architecture
+  ansible.builtin.include_tasks: build-architecture.yml
+  loop: "{{ reverse_logger_artifact_build_architectures_resolved }}"
+  loop_control:
+    loop_var: reverse_logger_artifact_build_arch
+    label: "linux-{{ reverse_logger_artifact_build_arch }}"

@@ -1,0 +1,39 @@
+---
+- name: Restore the active target artifact release
+  ansible.builtin.file:
+    src: "{{ reverse_logger_artifact_active_manifest.release }}"
+    dest: "{{ reverse_logger_artifact_current_release_link }}"
+    state: link
+    force: true
+  notify: Restart nginx-edge-forwarder
+  when: reverse_logger_artifact_active_manifest.get('release', '') | length > 0
+
+- name: Queue edge health restart after automatic artifact rollback
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  notify: Restart edge-health
+  when:
+    - reverse_logger_artifact_active_manifest.get('release', '') | length > 0
+    - edge_health_enabled | bool
+
+- name: Stop unverified services when no active release exists
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop: >-
+    {{
+      ['nginx-edge-forwarder']
+      + (edge_health_enabled | bool | ternary(['edge-health'], []))
+    }}
+  when: reverse_logger_artifact_active_manifest.get('release', '') | length == 0
+
+- name: Remove failed pending target artifact manifest
+  ansible.builtin.file:
+    path: "{{ reverse_logger_artifact_deploy_state_dir }}/pending.json"
+    state: absent
+
+- name: Apply automatic artifact rollback
+  ansible.builtin.meta: flush_handlers
+  when: reverse_logger_artifact_active_manifest.get('release', '') | length > 0

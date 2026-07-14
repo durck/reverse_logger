@@ -1,0 +1,227 @@
+---
+- name: Validate target artifact inputs
+  ansible.builtin.assert:
+    that:
+      - reverse_logger_artifact_version | length > 0
+      - reverse_logger_artifact_version is match('^[A-Za-z0-9._-]+$')
+      - reverse_logger_artifact_cache_dir | length > 0
+      - reverse_logger_artifact_goarch in ['amd64', 'arm64']
+      - >-
+        reverse_logger_artifact_goarch
+        in hostvars['localhost']['reverse_logger_artifact_build_architectures_resolved']
+    fail_msg: >-
+      No controller artifact is available for this host. Check the artifact
+      version/cache and add its architecture to
+      reverse_logger_artifact_build_architectures.
+    quiet: true
+
+- name: Resolve target artifact paths
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_local_dir: >-
+      {{ reverse_logger_artifact_cache_dir }}/{{ reverse_logger_artifact_version }}/linux-{{ reverse_logger_artifact_goarch }}
+    reverse_logger_artifact_target_binaries: >-
+      {{
+        ['nginx-edge-forwarder']
+        + (edge_health_enabled | bool | ternary(['edge-health'], []))
+      }}
+
+- name: Validate controller artifact files and checksums
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.fileglob', reverse_logger_artifact_local_dir ~ '/' ~ item) | length > 0
+      - lookup('ansible.builtin.fileglob', reverse_logger_artifact_local_dir ~ '/' ~ item ~ '.sha256') | length > 0
+    fail_msg: "Missing controller artifact or checksum for {{ item }}."
+    quiet: true
+  loop: "{{ reverse_logger_artifact_target_binaries }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Initialize expected controller artifact checksum map
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_expected_checksums: {}
+
+- name: Read expected controller artifact checksums
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_expected_checksums: >-
+      {{
+        reverse_logger_artifact_expected_checksums
+        | combine(
+          {
+            item: lookup(
+              'ansible.builtin.file',
+              reverse_logger_artifact_local_dir ~ '/' ~ item ~ '.sha256'
+            ).split()[0]
+          }
+        )
+      }}
+  loop: "{{ reverse_logger_artifact_target_binaries }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Resolve content-addressed target artifact release
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_release_digest: >-
+      {{
+        reverse_logger_artifact_target_binaries
+        | map('extract', reverse_logger_artifact_expected_checksums)
+        | join(':')
+        | hash('sha256')
+      }}
+    reverse_logger_artifact_release_dir: >-
+      {{
+        reverse_logger_artifact_release_root
+        ~ '/'
+        ~ reverse_logger_artifact_version
+        ~ '-linux-'
+        ~ reverse_logger_artifact_goarch
+        ~ '-'
+        ~ (
+          reverse_logger_artifact_target_binaries
+          | map('extract', reverse_logger_artifact_expected_checksums)
+          | join(':')
+          | hash('sha256')
+        )[:12]
+      }}
+
+- name: Create versioned release and deployment state directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ reverse_logger_artifact_release_root }}"
+      mode: "0755"
+    - path: "{{ reverse_logger_artifact_release_dir }}"
+      mode: "0755"
+    - path: "{{ reverse_logger_artifact_deploy_state_dir }}"
+      mode: "0750"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Read existing active artifact manifest
+  ansible.builtin.slurp:
+    path: "{{ reverse_logger_artifact_deploy_state_dir }}/active.json"
+  register: reverse_logger_artifact_active_manifest_raw
+  changed_when: false
+  failed_when: false
+
+- name: Resolve existing active artifact manifest
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_active_manifest: >-
+      {{
+        (
+          reverse_logger_artifact_active_manifest_raw.content
+          | b64decode
+          | from_json
+        )
+        if (reverse_logger_artifact_active_manifest_raw.content | default('') | length > 0)
+        else {}
+      }}
+
+- name: Copy controller artifacts into the versioned release
+  ansible.builtin.copy:
+    src: "{{ reverse_logger_artifact_local_dir }}/{{ item }}"
+    dest: "{{ reverse_logger_artifact_release_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ reverse_logger_artifact_target_binaries }}"
+  loop_control:
+    label: "{{ item }}"
+  register: reverse_logger_artifact_release_copy
+
+- name: Calculate target artifact checksums
+  ansible.builtin.stat:
+    path: "{{ reverse_logger_artifact_release_dir }}/{{ item }}"
+    checksum_algorithm: sha256
+  loop: "{{ reverse_logger_artifact_target_binaries }}"
+  loop_control:
+    label: "{{ item }}"
+  register: reverse_logger_artifact_remote_checksums
+
+- name: Verify target artifact checksums
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.stat.checksum
+        == reverse_logger_artifact_expected_checksums[item.item]
+    fail_msg: "SHA-256 mismatch after copying {{ item.item }}."
+    quiet: true
+  loop: "{{ reverse_logger_artifact_remote_checksums.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Decide whether target artifact activation is required
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_activation_required: >-
+      {{
+        reverse_logger_artifact_active_manifest.get('version', '')
+        != reverse_logger_artifact_version
+        or reverse_logger_artifact_active_manifest.get('release', '')
+        != reverse_logger_artifact_release_dir
+        or (
+          reverse_logger_artifact_release_copy.results
+          | selectattr('changed')
+          | list
+          | length
+        ) > 0
+      }}
+
+- name: Write pending target artifact manifest
+  ansible.builtin.copy:
+    dest: "{{ reverse_logger_artifact_deploy_state_dir }}/pending.json"
+    owner: root
+    group: root
+    mode: "0640"
+    content: >-
+      {{
+        {
+          'version': reverse_logger_artifact_version,
+          'os': 'linux',
+          'arch': reverse_logger_artifact_goarch,
+          'release_digest': reverse_logger_artifact_release_digest,
+          'release': reverse_logger_artifact_release_dir,
+          'previous_release': reverse_logger_artifact_active_manifest.get('release', ''),
+          'artifacts': reverse_logger_artifact_expected_checksums
+        }
+        | to_nice_json
+      }}
+  when: reverse_logger_artifact_activation_required | bool
+
+- name: Switch the current target artifact release
+  ansible.builtin.file:
+    src: "{{ reverse_logger_artifact_release_dir }}"
+    dest: "{{ reverse_logger_artifact_current_release_link }}"
+    state: link
+    force: true
+  when: reverse_logger_artifact_activation_required | bool
+
+- name: Link target artifact executables to the current release
+  ansible.builtin.file:
+    src: "{{ reverse_logger_artifact_current_release_link }}/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+    force: true
+  loop: "{{ reverse_logger_artifact_target_binaries }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Queue nginx edge forwarder restart for artifact activation
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  notify: Restart nginx-edge-forwarder
+  when: reverse_logger_artifact_activation_required | bool
+
+- name: Queue edge health restart for artifact activation
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  notify: Restart edge-health
+  when:
+    - reverse_logger_artifact_activation_required | bool
+    - edge_health_enabled | bool

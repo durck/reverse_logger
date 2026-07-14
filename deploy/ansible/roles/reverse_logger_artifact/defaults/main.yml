@@ -1,0 +1,12 @@
+---
+reverse_logger_artifact_version: >-
+  {{ hostvars['localhost']['reverse_logger_artifact_build_version'] | default('') }}
+reverse_logger_artifact_cache_dir: >-
+  {{ hostvars['localhost']['reverse_logger_artifact_build_cache_dir_resolved'] | default('') }}
+reverse_logger_artifact_goarch: amd64
+reverse_logger_artifact_release_root: /opt/reverse-logger/releases
+reverse_logger_artifact_current_release_link: /opt/reverse-logger/current
+reverse_logger_artifact_deploy_state_dir: /var/lib/reverse-logger/deploy
+reverse_logger_artifact_all_binaries:
+  - nginx-edge-forwarder
+  - edge-health

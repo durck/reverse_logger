@@ -1,0 +1,149 @@
+---
+- name: Resolve controller artifact directory
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_build_dir: >-
+      {{ reverse_logger_artifact_build_cache_dir_resolved }}/{{ reverse_logger_artifact_build_version }}/linux-{{ reverse_logger_artifact_build_arch }}
+
+- name: Create controller artifact directory
+  ansible.builtin.file:
+    path: "{{ reverse_logger_artifact_build_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Inspect cached controller artifacts
+  ansible.builtin.stat:
+    path: "{{ reverse_logger_artifact_build_dir }}/{{ item.name }}"
+    checksum_algorithm: sha256
+  loop: "{{ reverse_logger_artifact_build_binaries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: reverse_logger_artifact_build_cached_binaries
+
+- name: Inspect cached controller artifact checksum sidecars
+  ansible.builtin.stat:
+    path: "{{ reverse_logger_artifact_build_dir }}/{{ item.name }}.sha256"
+  loop: "{{ reverse_logger_artifact_build_binaries }}"
+  loop_control:
+    label: "{{ item.name }}.sha256"
+  register: reverse_logger_artifact_build_cached_sidecars
+
+- name: Initialize controller artifact cache validation
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_build_cache_valid: true
+
+- name: Validate cached controller artifact checksums
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_build_cache_valid: >-
+      {{
+        reverse_logger_artifact_build_cache_valid
+        and (item.0.stat.exists | default(false))
+        and (item.1.stat.exists | default(false))
+        and (
+          item.0.stat.checksum
+          == lookup('ansible.builtin.file', item.1.stat.path).split()[0]
+        )
+      }}
+  loop: >-
+    {{
+      reverse_logger_artifact_build_cached_binaries.results
+      | zip(reverse_logger_artifact_build_cached_sidecars.results)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.0.item.name }}"
+
+- name: Resolve controller artifacts requiring a build
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_build_missing_binaries: >-
+      {{
+        []
+        if reverse_logger_artifact_build_cache_valid
+        else reverse_logger_artifact_build_binaries
+      }}
+
+- name: Download Go modules once for the artifact build
+  ansible.builtin.command:
+    argv:
+      - go
+      - mod
+      - download
+  args:
+    chdir: "{{ reverse_logger_artifact_build_source_dir }}"
+  environment:
+    PATH: "{{ lookup('ansible.builtin.env', 'PATH') }}"
+    CGO_ENABLED: "0"
+    GOOS: linux
+    GOARCH: "{{ reverse_logger_artifact_build_arch }}"
+    GOTOOLCHAIN: "{{ reverse_logger_artifact_build_go_toolchain }}"
+    GOPROXY: "{{ reverse_logger_artifact_build_go_proxy }}"
+    GOSUMDB: "{{ reverse_logger_artifact_build_go_sumdb }}"
+  changed_when: false
+  when: reverse_logger_artifact_build_missing_binaries | length > 0
+
+- name: Build missing controller artifacts
+  ansible.builtin.command:
+    argv:
+      - go
+      - build
+      - -trimpath
+      - -ldflags
+      - -s -w
+      - -o
+      - "{{ reverse_logger_artifact_build_dir }}/{{ item.name }}"
+      - "{{ item.package }}"
+  args:
+    chdir: "{{ reverse_logger_artifact_build_source_dir }}"
+  environment:
+    PATH: "{{ lookup('ansible.builtin.env', 'PATH') }}"
+    CGO_ENABLED: "0"
+    GOOS: linux
+    GOARCH: "{{ reverse_logger_artifact_build_arch }}"
+    GOTOOLCHAIN: "{{ reverse_logger_artifact_build_go_toolchain }}"
+    GOPROXY: "{{ reverse_logger_artifact_build_go_proxy }}"
+    GOSUMDB: "{{ reverse_logger_artifact_build_go_sumdb }}"
+  loop: "{{ reverse_logger_artifact_build_missing_binaries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  when: reverse_logger_artifact_build_missing_binaries | length > 0
+
+- name: Calculate controller artifact checksums
+  ansible.builtin.stat:
+    path: "{{ reverse_logger_artifact_build_dir }}/{{ item.name }}"
+    checksum_algorithm: sha256
+  loop: "{{ reverse_logger_artifact_build_binaries }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: reverse_logger_artifact_build_built_checksums
+
+- name: Write controller artifact checksum sidecars
+  ansible.builtin.copy:
+    dest: "{{ item.stat.path }}.sha256"
+    mode: "0640"
+    content: "{{ item.stat.checksum }}  {{ item.item.name }}\n"
+  loop: "{{ reverse_logger_artifact_build_built_checksums.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Write controller artifact manifest
+  ansible.builtin.copy:
+    dest: "{{ reverse_logger_artifact_build_dir }}/manifest.json"
+    mode: "0640"
+    content: >-
+      {{
+        {
+          'version': reverse_logger_artifact_build_version,
+          'source_revision': reverse_logger_artifact_build_git_revision.stdout | trim,
+          'source_dirty': (reverse_logger_artifact_build_git_status.stdout | trim | length) > 0,
+          'os': 'linux',
+          'arch': reverse_logger_artifact_build_arch,
+          'go_toolchain': reverse_logger_artifact_build_go_toolchain,
+          'go_sumdb': reverse_logger_artifact_build_go_sumdb,
+          'artifacts': dict(
+            reverse_logger_artifact_build_built_checksums.results
+            | map(attribute='item.name')
+            | zip(reverse_logger_artifact_build_built_checksums.results | map(attribute='stat.checksum'))
+          )
+        }
+        | to_nice_json
+      }}

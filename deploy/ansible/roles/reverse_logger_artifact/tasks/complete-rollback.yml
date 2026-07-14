@@ -1,0 +1,16 @@
+---
+- name: Promote previous artifact manifest after rollback verification
+  ansible.builtin.copy:
+    dest: "{{ reverse_logger_artifact_deploy_state_dir }}/active.json"
+    owner: root
+    group: root
+    mode: "0640"
+    content: "{{ reverse_logger_artifact_rollback_previous | to_nice_json }}"
+
+- name: Preserve replaced artifact manifest for forward recovery
+  ansible.builtin.copy:
+    dest: "{{ reverse_logger_artifact_deploy_state_dir }}/previous.json"
+    owner: root
+    group: root
+    mode: "0640"
+    content: "{{ reverse_logger_artifact_rollback_active | to_nice_json }}"

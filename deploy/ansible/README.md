@@ -14,8 +14,9 @@ The playbook owns the VPS edge layer only:
 - issues a free Let's Encrypt certificate with HTTP-01 webroot validation or
   Timeweb DNS-01 validation;
 - clones `reverse_logger`;
-- builds and installs `cmd/nginx-edge-forwarder`;
-- builds and installs `cmd/edge-health`;
+- builds and installs `cmd/nginx-edge-forwarder` only when its source commit
+  changed, the binary is missing, or a rebuild is forced;
+- does the same incremental build for `cmd/edge-health`;
 - creates state directories;
 - renders `/etc/reverse-logger/nginx-edge-forwarder.env` per host;
 - renders `/etc/reverse-logger/edge-health.env` per host;
@@ -455,7 +456,7 @@ Set it back to `false` after the migration.
 The VPS playbook retries transient network operations with bounded backoff:
 package installs, backend reachability checks, optional source-IP probes, HTTP-01
 preflight checks, Snap Store operations, GitHub checkout, Go module downloads,
-and DNS-01 certbot runs.
+DNS-01 certbot runs, and expected health-node registration.
 
 ```yaml
 nginx_edge_network_retries: 3
@@ -467,13 +468,86 @@ nginx_edge_certbot_snap_fallback_to_pip: true
 nginx_edge_certbot_venv_path: /opt/certbot
 nginx_edge_acme_retries: 2
 nginx_edge_acme_delay: 15
+nginx_edge_acme_throttle: 1
 ```
 
 Snap retries are shorter than the generic network retry budget because a
 persistent Snap Store failure can fall back to the pip/venv Certbot path.
 
-The target-side Go build avoids Go's automatic toolchain download during
-deployment:
+### Scalable artifact rollout (recommended)
+
+Use `deploy_edge.py` as the normal one-command entry point. It takes a local
+deployment lock, builds the two Linux binaries once per architecture on the
+controller, rolls them out through health-gated batches, and publishes links on
+main only after the complete edge rollout exits successfully:
+
+```sh
+cd deploy/ansible
+python3 deploy_edge.py -i inventory.yml
+```
+
+The controller needs Ansible and a Go toolchain compatible with `go.mod`.
+Targets do not need Git, Go, source checkout, or module-proxy access in this
+workflow. Set each host or child group architecture when the fleet is
+heterogeneous:
+
+```yaml
+reverse_logger_artifact_goarch: amd64  # or arm64
+```
+
+The build play derives the unique architecture list from the selected
+`vps_edge` inventory. Artifacts are cached under `.artifacts/<version>/`, with
+SHA-256 sidecars and a JSON manifest. A cache entry is reused only while both
+binaries still match their sidecars. The directory is deployment state and is
+gitignored.
+
+Tracked or untracked Go build-input changes (`go.mod`, `go.sum`, `cmd/`, and
+`internal/`) block a normal artifact build because the binaries must map to
+immutable source. Documentation or Ansible-only working-tree changes do not
+change the binary cache key. For an explicit development smoke test only, opt
+in to a non-cacheable dirty version:
+
+```sh
+python3 deploy_edge.py \
+  -e reverse_logger_artifact_build_allow_dirty_source=true \
+  --skip-links
+```
+
+Each VPS receives a versioned, content-addressed release under
+`/opt/reverse-logger/releases`; the directory name includes a digest of both
+binaries, so rebuilding the same source version cannot overwrite a retained
+rollback candidate.
+Ansible verifies SHA-256 after copying, writes `pending.json`, switches the
+`current` symlink, flushes handlers, checks nginx/services/listeners and public
+HTTPS, registers expected central health, and only then promotes the release to
+`active.json`. A failed gate restores the active release when one exists and
+prevents link publication.
+
+`--limit` is supported by the wrapper; it automatically keeps controller
+`localhost` in the rollout phase and the `main` group in the link phase:
+
+```sh
+python3 deploy_edge.py -i inventory.yml --limit edge1
+```
+
+To roll out without changing links, pass `--skip-links`. Full `--check` is
+rejected explicitly because certificate issuance, service health, and central
+registration require real state. Use `--syntax-check` plus a disposable test
+inventory instead.
+
+Roll back the selected fleet to its retained previous artifact with:
+
+```sh
+ansible-playbook -i inventory.yml playbooks/edge-rollback.yml
+```
+
+Rollback uses the same rolling batches and health gate, then swaps
+`active.json` and `previous.json`. Release garbage collection is intentionally
+manual until a retention policy is defined.
+
+The following target-side Go settings apply only to the legacy direct
+`vps-edge.yml` compatibility path. That path avoids Go's automatic toolchain
+download during deployment:
 
 ```yaml
 reverse_logger_go_min_version: "1.23"
@@ -491,13 +565,15 @@ reverse_logger_go_direct_probe_hosts:
   - modernc.org
   - github.com
 reverse_logger_go_direct_probe_timeout: 3
-reverse_logger_go_sumdb: "off"
+reverse_logger_force_rebuild: false
+reverse_logger_build_state_dir: /var/lib/reverse-logger/build-state
+reverse_logger_go_sumdb: sum.golang.org
 reverse_logger_go_retries: 2
 reverse_logger_go_delay: 5
-reverse_logger_go_download_trace: true
+reverse_logger_go_download_trace: false
 reverse_logger_go_download_async_timeout: 180
 reverse_logger_go_download_poll_interval: 5
-nginx_edge_fix_resolv_conf: true
+nginx_edge_fix_resolv_conf: false
 nginx_edge_resolv_conf_source: /run/systemd/resolve/resolv.conf
 ```
 
@@ -508,28 +584,34 @@ uses the first reachable module proxy. If none of the HTTP proxies respond, it
 falls back to `direct` only when the configured direct origin hosts resolve from
 the target.
 
-The committed `go.sum` does not replace online checksum-database verification:
-`reverse_logger_go_sumdb: "off"` is a compatibility setting for restricted
-networks and weakens the production supply chain. Prefer `sum.golang.org` or a
-trusted internal checksum database, and make `off` an explicit emergency
-override. The target design is to build once in CI and deploy an immutable,
-checksummed artifact; see the [Ansible review](../../docs/ansible-review.md).
-`reverse_logger_go_download_trace` enables
-`go mod download -x` for useful failure diagnostics. Ansible cannot display a
-byte-level Go download progress bar, but the async timeout/poll settings make
-long downloads show periodic polling instead of a silent task. The default
-budgets intentionally fail fast; increase the retry, delay, and async timeout
-values for very slow targets.
+The committed `go.sum` does not replace online checksum-database verification,
+so `sum.golang.org` is the default. A trusted internal checksum database is also
+valid. Set `reverse_logger_go_sumdb: "off"` only as an explicit emergency
+override for a restricted network; it weakens the production supply chain. New
+production rollout should use controller artifacts; see the
+[Ansible review](../../docs/ansible-review.md) and
+[architecture decision](../../docs/architecture/adr/0001-scalable-ansible-edge-rollout.md).
 
-At the start of the playbook, `nginx_edge_fix_resolv_conf` points
-`/etc/resolv.conf` at the systemd-resolved runtime file. This is equivalent to
-`ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf` and keeps later
-Snap/Go/apt DNS checks on the same resolver path.
+Legacy target builds write the checked-out Git commit to
+`reverse_logger_build_state_dir`, one marker per binary. Later idempotent runs
+skip Go version checks, proxy probes, module download, and compilation when the
+installed binary marker already matches the checkout. Set
+`reverse_logger_force_rebuild: true` for a one-off rebuild after toolchain or
+build-flag changes, then reset it to `false`. Missing/stale markers deliberately
+trigger a rebuild, so a previously interrupted deploy repairs itself.
+
+`reverse_logger_go_download_trace: true` enables `go mod download -x` for
+failure diagnostics. It is off by default to keep normal Ansible output small.
+The async timeout/poll settings still make long downloads show periodic polling.
+
+When explicitly enabled, `nginx_edge_fix_resolv_conf` points `/etc/resolv.conf`
+at the systemd-resolved runtime file. This is equivalent to
+`ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf`.
 
 This setting changes host-wide DNS state and assumes systemd-resolved owns the
-resolver. Validate that assumption on the target image; set it to `false` for
-NetworkManager, cloud-init-managed, containerized, or otherwise different DNS
-layouts. Changing the default to opt-in is tracked in the Ansible review.
+resolver. It is therefore `false` by default. Enable it only after validating
+that systemd-resolved owns DNS on the target image; leave it disabled for
+NetworkManager, cloud-init-managed, containerized, or other DNS layouts.
 
 Snap installs first check whether `core`, `certbot`, and `certbot-dns-multi`
 are already installed. The playbook only checks `api.snapcraft.io` DNS before a
@@ -567,6 +649,8 @@ not a supported clean-host installation path.
 ACME retries are intentionally conservative because repeated real validation
 failures can consume Let's Encrypt failed-validation limits. Fix DNS, public
 `80/tcp`, or DNS-provider credentials before increasing `nginx_edge_acme_retries`.
+`nginx_edge_acme_throttle: 1` also serializes certificate issuance inside a
+rollout batch while unrelated host tasks can still run in parallel.
 
 ### Auto-derived per VPS
 
@@ -586,12 +670,39 @@ encrypted. Override them with verified HTTPS endpoints for untrusted transit.
 For production, also pin `reverse_logger_repo_version` to a reviewed immutable
 tag or commit instead of following `main`.
 
+### Rolling rollout
+
+The VPS play uses one canary, one 25% batch, and then the remaining fleet. With
+the default zero failure budget, a failed canary or batch stops all remaining
+hosts:
+
+```yaml
+edge_rollout_serial:
+  - 1
+  - 25%
+  - 100%
+edge_rollout_max_fail_percentage: 0
+```
+
+Inventory order selects the canary, so keep the intended low-risk host first or
+use `--limit` for an explicit one-host validation. Override the batch list only
+when the fleet size and external API limits justify more concurrency.
+
 ## Run
 
 From `deploy/ansible` (uses local `ansible.cfg`):
 
 ```sh
 cd deploy/ansible
+python3 deploy_edge.py -i inventory.yml
+```
+
+This is the recommended artifact workflow. `ansible.cfg` enables SSH pipelining
+and 25 forks; `serial` still bounds the rollout blast radius.
+
+Direct `vps-edge.yml` runs keep the source-on-target compatibility path:
+
+```sh
 ansible-playbook vps-edge.yml
 ```
 
@@ -602,7 +713,8 @@ GitHub over `443/tcp`, keep the existing checkout and skip fetches:
 ansible-playbook vps-edge.yml -e reverse_logger_repo_update=false
 ```
 
-Deploy VPS edges and then immediately generate links on main:
+The old combined playbook remains for compatibility, but it does not provide
+the wrapper's process lock and explicit rollout-success barrier:
 
 ```sh
 ansible-playbook edge-and-links.yml

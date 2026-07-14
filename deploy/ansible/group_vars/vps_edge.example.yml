@@ -3,7 +3,27 @@
 
 redirect_target: https://example.com
 
+# Roll out one deterministic canary first, then continue in 25% batches. Any
+# failed host stops the remaining batches.
+edge_rollout_serial:
+  - 1
+  - 25%
+  - 100%
+edge_rollout_max_fail_percentage: 0
+
+# The one-command artifact workflow builds once per architecture on the
+# controller. Override this in child groups for heterogeneous fleets.
+reverse_logger_artifact_goarch: amd64
+# Keep the external batch gate enabled for production certificates. Disable it
+# only for isolated/self-signed smoke environments.
+edge_verify_public_https: true
+edge_verify_public_validate_certs: true
+
+# Production should set reverse_logger_repo_version to a reviewed immutable tag
+# or commit. The playbook keeps "main" only as a compatibility fallback.
 reverse_logger_repo_update: true
+reverse_logger_force_rebuild: false
+reverse_logger_build_state_dir: /var/lib/reverse-logger/build-state
 reverse_logger_go_min_version: "1.23"
 reverse_logger_go_toolchain: local
 reverse_logger_go_proxy: https://goproxy.io,direct
@@ -19,13 +39,15 @@ reverse_logger_go_direct_probe_hosts:
   - modernc.org
   - github.com
 reverse_logger_go_direct_probe_timeout: 3
-reverse_logger_go_sumdb: "off"
+reverse_logger_go_sumdb: sum.golang.org
 reverse_logger_go_retries: 2
 reverse_logger_go_delay: 5
-reverse_logger_go_download_trace: true
+reverse_logger_go_download_trace: false
 reverse_logger_go_download_async_timeout: 180
 reverse_logger_go_download_poll_interval: 5
-nginx_edge_fix_resolv_conf: true
+# Host-wide resolver changes are opt-in; enable only when systemd-resolved owns
+# /etc/resolv.conf on the target image.
+nginx_edge_fix_resolv_conf: false
 nginx_edge_resolv_conf_source: /run/systemd/resolve/resolv.conf
 
 # Main address reachable from VPS edges. When edge forwarding is enabled, main
@@ -108,6 +130,7 @@ nginx_edge_certbot_venv_path: /opt/certbot
 # validation limits during real DNS or HTTP challenge misconfiguration.
 nginx_edge_acme_retries: 2
 nginx_edge_acme_delay: 15
+nginx_edge_acme_throttle: 1
 # When vps_internal_ip is not set explicitly, query the main logger for the
 # source IP it sees from this VPS. Leave required=false to fall back to the
 # logger's observed forwarder_ip when the probe is unavailable.

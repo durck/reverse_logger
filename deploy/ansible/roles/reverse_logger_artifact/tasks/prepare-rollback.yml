@@ -1,0 +1,51 @@
+---
+- name: Read active and previous artifact manifests for rollback
+  ansible.builtin.slurp:
+    path: "{{ reverse_logger_artifact_deploy_state_dir }}/{{ item }}.json"
+  loop:
+    - active
+    - previous
+  loop_control:
+    label: "{{ item }}.json"
+  register: reverse_logger_artifact_rollback_manifests
+
+- name: Resolve artifact rollback manifests
+  ansible.builtin.set_fact:
+    reverse_logger_artifact_rollback_active: >-
+      {{ reverse_logger_artifact_rollback_manifests.results[0].content | b64decode | from_json }}
+    reverse_logger_artifact_rollback_previous: >-
+      {{ reverse_logger_artifact_rollback_manifests.results[1].content | b64decode | from_json }}
+
+- name: Validate previous artifact release for rollback
+  ansible.builtin.stat:
+    path: "{{ reverse_logger_artifact_rollback_previous.release }}"
+  register: reverse_logger_artifact_rollback_previous_release
+
+- name: Require a retained previous artifact release
+  ansible.builtin.assert:
+    that:
+      - reverse_logger_artifact_rollback_previous.release | length > 0
+      - reverse_logger_artifact_rollback_previous_release.stat.isdir | default(false)
+    fail_msg: >-
+      The previous artifact manifest or retained release directory is missing;
+      rollback cannot continue safely.
+    quiet: true
+
+- name: Switch current link to the previous artifact release
+  ansible.builtin.file:
+    src: "{{ reverse_logger_artifact_rollback_previous.release }}"
+    dest: "{{ reverse_logger_artifact_current_release_link }}"
+    state: link
+    force: true
+  notify: Restart nginx-edge-forwarder
+
+- name: Queue edge health restart for artifact rollback
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  notify: Restart edge-health
+  when: edge_health_enabled | bool
+
+- name: Apply artifact rollback before verification
+  ansible.builtin.meta: flush_handlers

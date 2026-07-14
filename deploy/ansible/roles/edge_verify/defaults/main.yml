@@ -1,0 +1,14 @@
+---
+edge_verify_retries: 3
+edge_verify_delay: 2
+edge_verify_health_service_enabled: true
+edge_verify_forwarder_listen_addr: 127.0.0.1:18080
+edge_verify_public_https: true
+edge_verify_public_validate_certs: true
+edge_verify_public_status_codes:
+  - 200
+  - 301
+  - 302
+  - 307
+  - 308
+  - 404

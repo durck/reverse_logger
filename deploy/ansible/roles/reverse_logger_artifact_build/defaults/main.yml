@@ -1,0 +1,19 @@
+---
+reverse_logger_artifact_build_source_dir: ""
+reverse_logger_artifact_build_cache_dir: ""
+reverse_logger_artifact_build_architectures:
+  - amd64
+reverse_logger_artifact_build_allow_dirty_source: false
+reverse_logger_artifact_build_source_paths:
+  - go.mod
+  - go.sum
+  - cmd
+  - internal
+reverse_logger_artifact_build_go_toolchain: local
+reverse_logger_artifact_build_go_proxy: https://proxy.golang.org,direct
+reverse_logger_artifact_build_go_sumdb: sum.golang.org
+reverse_logger_artifact_build_binaries:
+  - name: nginx-edge-forwarder
+    package: ./cmd/nginx-edge-forwarder
+  - name: edge-health
+    package: ./cmd/edge-health

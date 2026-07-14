@@ -1,0 +1,19 @@
+---
+- name: Restore artifact release used before rollback
+  ansible.builtin.file:
+    src: "{{ reverse_logger_artifact_rollback_active.release }}"
+    dest: "{{ reverse_logger_artifact_current_release_link }}"
+    state: link
+    force: true
+  notify: Restart nginx-edge-forwarder
+
+- name: Queue edge health restart after cancelled rollback
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  notify: Restart edge-health
+  when: edge_health_enabled | bool
+
+- name: Apply cancelled artifact rollback
+  ansible.builtin.meta: flush_handlers

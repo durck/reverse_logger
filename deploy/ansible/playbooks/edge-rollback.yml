@@ -1,0 +1,50 @@
+---
+- name: Roll back reverse_logger edge artifacts
+  hosts: vps_edge
+  become: true
+  gather_facts: false
+  serial: "{{ edge_rollout_serial | default([1, '25%', '100%']) }}"
+  max_fail_percentage: "{{ edge_rollout_max_fail_percentage | default(0) }}"
+  tasks:
+    - name: Switch to and verify the previous edge artifact
+      block:
+        - name: Prepare previous edge artifact
+          ansible.builtin.include_role:
+            name: reverse_logger_artifact
+            tasks_from: prepare-rollback
+
+        - name: Verify previous edge artifact
+          ansible.builtin.include_role:
+            name: edge_verify
+          vars:
+            edge_verify_health_service_enabled: "{{ edge_health_enabled | default(true) | bool }}"
+            edge_verify_forwarder_listen_addr: >-
+              {{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}
+
+        - name: Complete previous edge artifact promotion
+          ansible.builtin.include_role:
+            name: reverse_logger_artifact
+            tasks_from: complete-rollback
+      rescue:
+        - name: Restore release used before the failed rollback
+          ansible.builtin.include_role:
+            name: reverse_logger_artifact
+            tasks_from: cancel-rollback
+
+        - name: Stop after failed rollback verification
+          ansible.builtin.fail:
+            msg: >-
+              Rollback verification failed on {{ inventory_hostname }}; the
+              release active before this rollback was restored.
+
+  handlers:
+    - name: Restart nginx-edge-forwarder
+      ansible.builtin.systemd:
+        name: nginx-edge-forwarder
+        state: restarted
+
+    - name: Restart edge-health
+      ansible.builtin.systemd:
+        name: edge-health
+        state: restarted
+      when: edge_health_enabled | bool

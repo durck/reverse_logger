@@ -3,6 +3,11 @@
   hosts: vps_edge
   become: true
   gather_facts: true
+  gather_subset:
+    - min
+    - network
+  serial: "{{ edge_rollout_serial | default([1, '25%', '100%']) }}"
+  max_fail_percentage: "{{ edge_rollout_max_fail_percentage | default(0) }}"
 
   pre_tasks:
     - name: Apply default edge deployment variables
@@ -10,7 +15,13 @@
         reverse_logger_repo_url: "{{ reverse_logger_repo_url | default('https://github.com/durck/reverse_logger.git', true) }}"
         reverse_logger_repo_version: "{{ reverse_logger_repo_version | default('main', true) }}"
         reverse_logger_repo_update: "{{ reverse_logger_repo_update | default(true) }}"
+        reverse_logger_install_mode: "{{ reverse_logger_install_mode | default('target_source', true) }}"
         reverse_logger_src_dir: "{{ reverse_logger_src_dir | default('/opt/reverse-logger', true) }}"
+        reverse_logger_force_rebuild: "{{ reverse_logger_force_rebuild | default(false) }}"
+        reverse_logger_forwarder_build_required: false
+        reverse_logger_edge_health_build_required: false
+        reverse_logger_go_build_required: false
+        reverse_logger_build_state_dir: "{{ reverse_logger_build_state_dir | default('/var/lib/reverse-logger/build-state', true) }}"
         reverse_logger_go_min_version: "{{ reverse_logger_go_min_version | default('1.23', true) }}"
         reverse_logger_go_toolchain: "{{ reverse_logger_go_toolchain | default('local', true) }}"
         reverse_logger_go_proxy: "{{ reverse_logger_go_proxy | default('https://goproxy.io,direct', true) }}"
@@ -19,13 +30,13 @@
         reverse_logger_go_proxy_probe_timeout: "{{ reverse_logger_go_proxy_probe_timeout | default(3, true) }}"
         reverse_logger_go_direct_probe_hosts: "{{ reverse_logger_go_direct_probe_hosts | default(['golang.org', 'modernc.org', 'github.com'], true) }}"
         reverse_logger_go_direct_probe_timeout: "{{ reverse_logger_go_direct_probe_timeout | default(3, true) }}"
-        reverse_logger_go_sumdb: "{{ reverse_logger_go_sumdb | default('off', true) }}"
+        reverse_logger_go_sumdb: "{{ reverse_logger_go_sumdb | default('sum.golang.org', true) }}"
         reverse_logger_go_retries: "{{ reverse_logger_go_retries | default(2, true) }}"
         reverse_logger_go_delay: "{{ reverse_logger_go_delay | default(5, true) }}"
-        reverse_logger_go_download_trace: "{{ reverse_logger_go_download_trace | default(true) }}"
+        reverse_logger_go_download_trace: "{{ reverse_logger_go_download_trace | default(false) }}"
         reverse_logger_go_download_async_timeout: "{{ reverse_logger_go_download_async_timeout | default(180, true) }}"
         reverse_logger_go_download_poll_interval: "{{ reverse_logger_go_download_poll_interval | default(5, true) }}"
-        nginx_edge_fix_resolv_conf: "{{ nginx_edge_fix_resolv_conf | default(true) }}"
+        nginx_edge_fix_resolv_conf: "{{ nginx_edge_fix_resolv_conf | default(false) }}"
         nginx_edge_resolv_conf_source: "{{ nginx_edge_resolv_conf_source | default('/run/systemd/resolve/resolv.conf', true) }}"
         nginx_edge_listen_addr: "{{ nginx_edge_listen_addr | default('127.0.0.1:18080', true) }}"
         nginx_edge_capture_mode: "{{ nginx_edge_capture_mode | default('mirror', true) }}"
@@ -67,6 +78,7 @@
         nginx_edge_certbot_venv_path: "{{ nginx_edge_certbot_venv_path | default('/opt/certbot', true) }}"
         nginx_edge_acme_retries: "{{ nginx_edge_acme_retries | default(2, true) }}"
         nginx_edge_acme_delay: "{{ nginx_edge_acme_delay | default(15, true) }}"
+        nginx_edge_acme_throttle: "{{ nginx_edge_acme_throttle | default(1, true) }}"
         tls_cert_path: "{{ tls_cert_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/fullchain.pem', true) }}"
         tls_key_path: "{{ tls_key_path | default('/etc/letsencrypt/live/' ~ (nginx_edge_acme_cert_name | default(rssh_domain | default('', true), true)) ~ '/privkey.pem', true) }}"
         redirect_target: "{{ redirect_target | default('https://example.com', true) }}"
@@ -91,6 +103,17 @@
         edge_health_vpn_iface: "{{ edge_health_vpn_iface | default('vpn_softether') }}"
         edge_health_softether_service: "{{ edge_health_softether_service | default('') }}"
         edge_health_local_services: "{{ edge_health_local_services | default(['nginx', 'nginx-edge-forwarder']) }}"
+        edge_verify_public_https: "{{ edge_verify_public_https | default(not (nginx_edge_create_self_signed_cert | default(false) | bool)) }}"
+      tags: always
+
+    - name: Validate reverse_logger installation mode
+      ansible.builtin.assert:
+        that:
+          - reverse_logger_install_mode in ['target_source', 'controller_artifact']
+        fail_msg: >-
+          reverse_logger_install_mode must be target_source or
+          controller_artifact.
+        quiet: true
       tags: always
 
     - name: Point /etc/resolv.conf at systemd-resolved runtime config
@@ -332,6 +355,10 @@
           - rssh_download_path_prefix[-1] != '/'
           - nginx_edge_acme_challenge in ['http-01', 'dns-timeweb']
           - nginx_edge_certbot_install_method in ['snap', 'pip']
+          - nginx_edge_acme_throttle | int >= 1
+          - reverse_logger_build_state_dir is match('^/.+')
+          - edge_rollout_max_fail_percentage | default(0) | int >= 0
+          - edge_rollout_max_fail_percentage | default(0) | int <= 100
           - not (nginx_edge_acme_enabled | bool and nginx_edge_create_self_signed_cert | bool)
         fail_msg: >-
           Fill deploy/ansible/group_vars/vps_edge.yml and per-host rssh_domain in
@@ -517,13 +544,14 @@
 
     - name: Install OS packages
       ansible.builtin.apt:
-        name:
-          - ca-certificates
-          - curl
-          - git
-          - golang-go
-          - nginx
-          - openssl
+        name: >-
+          {{
+            ['ca-certificates', 'curl', 'nginx', 'openssl']
+            + (
+              (reverse_logger_install_mode == 'target_source')
+              | ternary(['git', 'golang-go'], [])
+            )
+          }}
         update_cache: true
         cache_valid_time: 3600
         state: present
@@ -1095,6 +1123,7 @@
         mode: "0755"
       tags:
         - edge_health
+      when: reverse_logger_install_mode == 'target_source'
 
     - name: Clone reverse_logger repository
       ansible.builtin.git:
@@ -1106,6 +1135,113 @@
       until: reverse_logger_repo_checkout is succeeded
       retries: "{{ nginx_edge_network_retries | int }}"
       delay: "{{ nginx_edge_network_delay | int }}"
+      when: reverse_logger_install_mode == 'target_source'
+      tags:
+        - edge_health
+
+    - name: Validate reverse_logger checkout revision
+      ansible.builtin.assert:
+        that:
+          - reverse_logger_repo_checkout.after is defined
+          - reverse_logger_repo_checkout.after | length > 0
+        fail_msg: >-
+          The git checkout did not return a source revision, so the playbook
+          cannot make a safe incremental build decision.
+        quiet: true
+      when: reverse_logger_install_mode == 'target_source'
+      tags:
+        - edge_health
+
+    - name: Create reverse_logger build state directory
+      ansible.builtin.file:
+        path: "{{ reverse_logger_build_state_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      tags:
+        - edge_health
+      when: reverse_logger_install_mode == 'target_source'
+
+    - name: Check installed nginx-edge-forwarder binary
+      ansible.builtin.stat:
+        path: /usr/local/bin/nginx-edge-forwarder
+      register: reverse_logger_forwarder_binary
+      when: reverse_logger_install_mode == 'target_source'
+
+    - name: Read deployed nginx-edge-forwarder source version
+      ansible.builtin.slurp:
+        path: "{{ reverse_logger_build_state_dir }}/nginx-edge-forwarder.version"
+      register: reverse_logger_forwarder_version_marker
+      changed_when: false
+      failed_when: false
+      when: reverse_logger_install_mode == 'target_source'
+
+    - name: Decide whether nginx-edge-forwarder needs a rebuild
+      ansible.builtin.set_fact:
+        reverse_logger_forwarder_build_required: >-
+          {{
+            reverse_logger_force_rebuild | bool
+            or not (reverse_logger_forwarder_binary.stat.exists | default(false))
+            or (
+              reverse_logger_forwarder_version_marker.content
+              | default('')
+              | b64decode
+              | trim
+            ) != (reverse_logger_repo_checkout.after | default(''))
+          }}
+      when: reverse_logger_install_mode == 'target_source'
+
+    - name: Check installed edge-health binary
+      ansible.builtin.stat:
+        path: /usr/local/bin/edge-health
+      register: reverse_logger_edge_health_binary
+      when:
+        - reverse_logger_install_mode == 'target_source'
+        - edge_health_enabled | bool
+      tags:
+        - edge_health
+
+    - name: Read deployed edge-health source version
+      ansible.builtin.slurp:
+        path: "{{ reverse_logger_build_state_dir }}/edge-health.version"
+      register: reverse_logger_edge_health_version_marker
+      changed_when: false
+      failed_when: false
+      when:
+        - reverse_logger_install_mode == 'target_source'
+        - edge_health_enabled | bool
+      tags:
+        - edge_health
+
+    - name: Decide whether edge-health needs a rebuild
+      ansible.builtin.set_fact:
+        reverse_logger_edge_health_build_required: >-
+          {{
+            edge_health_enabled | bool
+            and (
+              reverse_logger_force_rebuild | bool
+              or not (reverse_logger_edge_health_binary.stat.exists | default(false))
+              or (
+                reverse_logger_edge_health_version_marker.content
+                | default('')
+                | b64decode
+                | trim
+              ) != (reverse_logger_repo_checkout.after | default(''))
+            )
+          }}
+      when: reverse_logger_install_mode == 'target_source'
+      tags:
+        - edge_health
+
+    - name: Decide whether the Go build toolchain is needed
+      ansible.builtin.set_fact:
+        reverse_logger_go_build_required: >-
+          {{
+            reverse_logger_forwarder_build_required | default(false) | bool
+            or reverse_logger_edge_health_build_required | default(false) | bool
+          }}
+      when: reverse_logger_install_mode == 'target_source'
       tags:
         - edge_health
 
@@ -1116,6 +1252,7 @@
           - version
       register: reverse_logger_go_version_cmd
       changed_when: false
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1125,12 +1262,14 @@
           - reverse_logger_go_version_cmd.stdout is search('^go version go[0-9]+\\.[0-9]+')
         fail_msg: "Unexpected go version output: {{ reverse_logger_go_version_cmd.stdout }}"
         quiet: true
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
     - name: Derive Go compiler version
       ansible.builtin.set_fact:
         reverse_logger_go_detected_version: "{{ reverse_logger_go_version_cmd.stdout | regex_replace('^go version go([0-9]+\\.[0-9]+(?:\\.[0-9]+)?).*$', '\\1') }}"
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1144,6 +1283,7 @@
           the VPS before building reverse_logger, or lower
           reverse_logger_go_min_version only if the source still supports it.
         quiet: true
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1158,7 +1298,9 @@
       register: reverse_logger_go_proxy_probe
       changed_when: false
       failed_when: false
-      when: item is match('^https?://')
+      when:
+        - reverse_logger_go_build_required | bool
+        - item is match('^https?://')
       tags:
         - edge_health
 
@@ -1174,6 +1316,7 @@
               | first
             ) | default('', true)
           }}
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1190,6 +1333,7 @@
       changed_when: false
       failed_when: false
       when:
+        - reverse_logger_go_build_required | bool
         - (reverse_logger_go_effective_proxy | default('') | length) == 0
         - "'direct' in reverse_logger_go_proxy_candidates"
       tags:
@@ -1199,6 +1343,7 @@
       ansible.builtin.set_fact:
         reverse_logger_go_effective_proxy: direct
       when:
+        - reverse_logger_go_build_required | bool
         - (reverse_logger_go_effective_proxy | default('') | length) == 0
         - (reverse_logger_go_direct_probe.results | default([]) | length) > 0
         - >-
@@ -1217,13 +1362,16 @@
           {{ reverse_logger_go_proxy_probe_module_path }}. Fix target DNS/HTTPS
           or set reverse_logger_go_proxy_candidates to a reachable internal proxy.
           Direct fallback DNS hosts: {{ reverse_logger_go_direct_probe_hosts | join(', ') }}.
-      when: (reverse_logger_go_effective_proxy | default('') | length) == 0
+      when:
+        - reverse_logger_go_build_required | bool
+        - (reverse_logger_go_effective_proxy | default('') | length) == 0
       tags:
         - edge_health
 
     - name: Show selected Go module proxy
       ansible.builtin.debug:
         msg: "Using GOPROXY={{ reverse_logger_go_effective_proxy }} for Go module download."
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1248,6 +1396,7 @@
       until: go_mod_download is succeeded
       retries: "{{ reverse_logger_go_retries | int }}"
       delay: "{{ reverse_logger_go_delay | int }}"
+      when: reverse_logger_go_build_required | bool
       tags:
         - edge_health
 
@@ -1270,6 +1419,7 @@
         GOPROXY: "{{ reverse_logger_go_effective_proxy }}"
         GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       changed_when: false
+      when: reverse_logger_forwarder_build_required | bool
 
     - name: Install nginx-edge-forwarder binary
       ansible.builtin.copy:
@@ -1280,6 +1430,16 @@
         group: root
         mode: "0755"
       notify: Restart nginx-edge-forwarder
+      when: reverse_logger_forwarder_build_required | bool
+
+    - name: Record deployed nginx-edge-forwarder source version
+      ansible.builtin.copy:
+        dest: "{{ reverse_logger_build_state_dir }}/nginx-edge-forwarder.version"
+        owner: root
+        group: root
+        mode: "0640"
+        content: "{{ reverse_logger_repo_checkout.after }}\n"
+      when: reverse_logger_forwarder_build_required | bool
 
     - name: Build edge-health
       ansible.builtin.command:
@@ -1299,7 +1459,9 @@
         GOPROXY: "{{ reverse_logger_go_effective_proxy }}"
         GOSUMDB: "{{ reverse_logger_go_sumdb }}"
       changed_when: false
-      when: edge_health_enabled | bool
+      when:
+        - edge_health_enabled | bool
+        - reverse_logger_edge_health_build_required | bool
       tags:
         - edge_health
 
@@ -1312,9 +1474,31 @@
         group: root
         mode: "0755"
       notify: Restart edge-health
-      when: edge_health_enabled | bool
+      when:
+        - edge_health_enabled | bool
+        - reverse_logger_edge_health_build_required | bool
       tags:
         - edge_health
+
+    - name: Record deployed edge-health source version
+      ansible.builtin.copy:
+        dest: "{{ reverse_logger_build_state_dir }}/edge-health.version"
+        owner: root
+        group: root
+        mode: "0640"
+        content: "{{ reverse_logger_repo_checkout.after }}\n"
+      when:
+        - edge_health_enabled | bool
+        - reverse_logger_edge_health_build_required | bool
+      tags:
+        - edge_health
+
+    - name: Install controller-built reverse_logger artifacts
+      ansible.builtin.include_role:
+        name: reverse_logger_artifact
+      when: reverse_logger_install_mode == 'controller_artifact'
+      tags:
+        - artifacts
 
     - name: Create reverse_logger config directory
       ansible.builtin.file:
@@ -1661,6 +1845,7 @@
       until: certbot_dns_issue.rc == 0
       retries: "{{ nginx_edge_acme_retries | int }}"
       delay: "{{ nginx_edge_acme_delay | int }}"
+      throttle: "{{ nginx_edge_acme_throttle | int }}"
       notify: Reload nginx
       when:
         - nginx_edge_acme_enabled | bool
@@ -1680,6 +1865,7 @@
       register: certbot_http_issue
       changed_when: "(certbot_http_issue.stdout + certbot_http_issue.stderr) is search('Successfully received certificate|Congratulations')"
       failed_when: false
+      throttle: "{{ nginx_edge_acme_throttle | int }}"
       notify: Reload nginx
       when:
         - nginx_edge_acme_enabled | bool
@@ -1719,6 +1905,7 @@
       until: certbot_dns_fallback_issue.rc == 0
       retries: "{{ nginx_edge_acme_retries | int }}"
       delay: "{{ nginx_edge_acme_delay | int }}"
+      throttle: "{{ nginx_edge_acme_throttle | int }}"
       notify: Reload nginx
       when:
         - nginx_edge_acme_enabled | bool
@@ -1800,8 +1987,16 @@
 
     - name: Install nginx-edge-forwarder systemd unit
       ansible.builtin.copy:
-        remote_src: true
-        src: "{{ reverse_logger_src_dir }}/deploy/systemd/nginx-edge-forwarder.service"
+        remote_src: "{{ reverse_logger_install_mode == 'target_source' }}"
+        src: >-
+          {{
+            (reverse_logger_src_dir ~ '/deploy/systemd/nginx-edge-forwarder.service')
+            if reverse_logger_install_mode == 'target_source'
+            else (
+              hostvars['localhost']['reverse_logger_artifact_build_source_dir_resolved']
+              ~ '/deploy/systemd/nginx-edge-forwarder.service'
+            )
+          }}
         dest: /etc/systemd/system/nginx-edge-forwarder.service
         owner: root
         group: root
@@ -1812,8 +2007,16 @@
 
     - name: Install edge-health systemd unit
       ansible.builtin.copy:
-        remote_src: true
-        src: "{{ reverse_logger_src_dir }}/deploy/systemd/edge-health.service"
+        remote_src: "{{ reverse_logger_install_mode == 'target_source' }}"
+        src: >-
+          {{
+            (reverse_logger_src_dir ~ '/deploy/systemd/edge-health.service')
+            if reverse_logger_install_mode == 'target_source'
+            else (
+              hostvars['localhost']['reverse_logger_artifact_build_source_dir_resolved']
+              ~ '/deploy/systemd/edge-health.service'
+            )
+          }}
         dest: /etc/systemd/system/edge-health.service
         owner: root
         group: root
@@ -1859,9 +2062,8 @@
         enabled: true
         state: started
 
-    - name: Reload systemd after unit installation
-      ansible.builtin.systemd:
-        daemon_reload: true
+    - name: Apply validated service configuration
+      ansible.builtin.meta: flush_handlers
       tags:
         - edge_health
 
@@ -1880,28 +2082,68 @@
       tags:
         - edge_health
 
-    - name: Register expected VPS health node
-      ansible.builtin.uri:
-        url: "{{ edge_health_expected_url }}"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ edge_health_token }}"
-        body_format: json
-        body:
-          bootstrap_grace_seconds: "{{ edge_health_bootstrap_grace_seconds | int }}"
-          nodes:
-            - vps_name: "{{ vps_name }}"
-              vps_public_ip: "{{ vps_public_ip }}"
-              vps_internal_ip: "{{ vps_internal_ip | default('', true) }}"
-        status_code: 202
-        timeout: "{{ edge_health_timeout | regex_replace('s$', '') | int }}"
-      register: edge_health_expected_register
-      changed_when: false
-      no_log: true
-      when: edge_health_enabled | bool
+    - name: Verify edge batch and promote the pending artifact
       tags:
+        - verify
         - edge_health
+      block:
+        - name: Run edge service and public endpoint health gate
+          ansible.builtin.include_role:
+            name: edge_verify
+          vars:
+            edge_verify_health_service_enabled: "{{ edge_health_enabled | bool }}"
+            edge_verify_forwarder_listen_addr: "{{ nginx_edge_listen_addr }}"
 
+        - name: Register expected VPS health node
+          ansible.builtin.uri:
+            url: "{{ edge_health_expected_url }}"
+            method: PUT
+            headers:
+              Authorization: "Bearer {{ edge_health_token }}"
+            body_format: json
+            body:
+              bootstrap_grace_seconds: "{{ edge_health_bootstrap_grace_seconds | int }}"
+              nodes:
+                - vps_name: "{{ vps_name }}"
+                  vps_public_ip: "{{ vps_public_ip }}"
+                  vps_internal_ip: "{{ vps_internal_ip | default('', true) }}"
+            status_code: 202
+            timeout: "{{ edge_health_timeout | regex_replace('s$', '') | int }}"
+          register: edge_health_expected_register
+          changed_when: false
+          no_log: true
+          until: (edge_health_expected_register.status | default(0) | int) == 202
+          retries: "{{ nginx_edge_network_retries | int }}"
+          delay: "{{ nginx_edge_network_delay | int }}"
+          when: edge_health_enabled | bool
+
+        - name: Promote verified controller artifact
+          ansible.builtin.include_role:
+            name: reverse_logger_artifact
+            tasks_from: promote
+          when: reverse_logger_install_mode == 'controller_artifact'
+      rescue:
+        - name: Restore the previously active controller artifact
+          ansible.builtin.include_role:
+            name: reverse_logger_artifact
+            tasks_from: restore-active
+          when: reverse_logger_install_mode == 'controller_artifact'
+
+        - name: Verify the automatically restored controller artifact
+          ansible.builtin.include_role:
+            name: edge_verify
+          vars:
+            edge_verify_health_service_enabled: "{{ edge_health_enabled | bool }}"
+            edge_verify_forwarder_listen_addr: "{{ nginx_edge_listen_addr }}"
+          when:
+            - reverse_logger_install_mode == 'controller_artifact'
+            - reverse_logger_artifact_active_manifest.get('release', '') | length > 0
+
+        - name: Stop the rollout after a failed edge health gate
+          ansible.builtin.fail:
+            msg: >-
+              Edge verification failed on {{ inventory_hostname }}. The current
+              rollout batch is stopped and link publication is blocked.
   post_tasks:
     - name: Show edge deployment summary
       ansible.builtin.debug:
